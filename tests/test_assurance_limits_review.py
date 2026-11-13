@@ -97,7 +97,7 @@ def run(t, reviews=(), tr_=None, trust_=None, **kw):
 
 
 def test_the_engine_was_bumped_because_the_tier_semantics_changed():
-    assert run(table()).engine_version == "6"
+    assert run(table()).engine_version == "7"
 
 
 # -- the original defect --------------------------------------------------

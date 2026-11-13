@@ -33,6 +33,7 @@ from datetime import UTC, date, datetime, timedelta
 from enum import StrEnum
 from typing import Any
 
+from assurance.core.errors import AssuranceError
 from assurance.core.identity import utc_now
 from assurance.core.tiers import AssuranceTier
 from assurance.machine import provenance_trust
@@ -47,12 +48,14 @@ __all__ = [
     "FORMULA_LIMITATION",
     "MIN_TRACE_DURATION_S",
     "MIN_TRACE_SAMPLES",
+    "OLDEST_RUNNABLE_ENGINE",
     "CheckOutcome",
     "CheckResult",
     "Verdict",
     "VerificationResult",
     "Violation",
     "is_known_engine",
+    "is_runnable_engine",
     "parse_engine_version",
     "verify",
 ]
@@ -89,7 +92,25 @@ __all__ = [
 #:    attestations as supplied) and ``machine_serial``. A bundle is believed to carry
 #:    ``recorder_attested`` only if the checker's own re-assessment reproduces it;
 #:    engine 5 and earlier bundles can never be read as recorder-attested.
-ENGINE_VERSION = "6"
+#: 7: a closing speed the TRACE reports (``human_speed``) that stands in for the envelope's
+#:    declared or default approach speed is disclosed in the stated limitations: how many
+#:    compared samples used it, the lowest value seen, and how many were below the figure the
+#:    envelope would otherwise have used. A sensed speed below that figure shortens Sh and
+#:    can turn a failing separation into a passing one (a sensed 0.0 replaces 1600 mm/s with
+#:    nothing said); until engine 6 the result stated only declared and default use. No check
+#:    outcome, verdict or tier changes. Engine 6 results are still produced by this build
+#:    (``verify(..., engine_version="6")``) and bundles sealed by engine 6 are replayed under
+#:    engine 6's rules, byte for byte (``bundle.check_bundle_data``).
+ENGINE_VERSION = "7"
+
+#: The engine that first states, in the result, that a sensed closing speed replaced the declared one.
+_FIRST_ENGINE_DISCLOSING_SENSED_SPEED = 7
+
+#: The oldest engine this build can still RUN. A bundle names the engine that sealed it, and
+#: the checker re-runs that engine, not the newest one: a re-run under different rules is not
+#: a reproduction. Engines before this one are recognised (``is_known_engine``) but their sets
+#: of checks and rules are not reproduced here.
+OLDEST_RUNNABLE_ENGINE = 6
 
 _ENGINE_SPELLING = re.compile(r"[1-9][0-9]{0,3}", re.ASCII)
 
@@ -106,6 +127,12 @@ def parse_engine_version(value: object) -> int | None:
     if type(value) is not str or not _ENGINE_SPELLING.fullmatch(value):
         return None
     return int(value)
+
+
+def is_runnable_engine(value: object) -> bool:
+    """Can this build re-run the engine ``value`` names (:data:`OLDEST_RUNNABLE_ENGINE` up)?"""
+    n = parse_engine_version(value)
+    return n is not None and OLDEST_RUNNABLE_ENGINE <= n <= int(ENGINE_VERSION)
 
 
 def is_known_engine(value: object) -> bool:
@@ -491,7 +518,9 @@ def _speed_limit(envelope: SafetyEnvelope, trace: Trace) -> CheckResult:
     return _across_gaps(result, trace, lambda _s: True)
 
 
-def _ssm_separation(envelope: SafetyEnvelope, trace: Trace) -> tuple[CheckResult, list[str]]:
+def _ssm_separation(
+    envelope: SafetyEnvelope, trace: Trace, engine: int = int(ENGINE_VERSION),
+) -> tuple[CheckResult, list[str]]:
     """The check that is the whole reason this package exists."""
     caveats: list[str] = []
     violations: list[Violation] = []
@@ -501,6 +530,7 @@ def _ssm_separation(envelope: SafetyEnvelope, trace: Trace) -> tuple[CheckResult
     extrapolated = 0
     declared_speed_used = 0
     default_speed_used = 0
+    sensed_speeds: list[float] = []
 
     relevant = [(i, s) for i, s in enumerate(trace.samples)
                 if s.mode.separation_is_the_control]
@@ -526,6 +556,8 @@ def _ssm_separation(envelope: SafetyEnvelope, trace: Trace) -> tuple[CheckResult
             declared_speed_used += 1
         elif breakdown.human_speed_source == "default":
             default_speed_used += 1
+        else:
+            sensed_speeds.append(breakdown.human_speed_mm_s)
         required = breakdown.total_mm
         if s.separation < required:
             violations.append(Violation(
@@ -570,6 +602,20 @@ def _ssm_separation(envelope: SafetyEnvelope, trace: Trace) -> tuple[CheckResult
             "person's closing speed: the envelope declares none and the trace "
             "recorded none. The default was adopted, not declared by anyone, and is "
             "quoted from memory of the standard (see ssm.py)."
+        )
+    if sensed_speeds and engine >= _FIRST_ENGINE_DISCLOSING_SENSED_SPEED:
+        fallback = envelope.approach_speed_mm_s
+        below = sum(1 for v in sensed_speeds if v < fallback)
+        caveats.append(
+            f"{len(sensed_speeds)} of {examined} compared samples used the closing speed "
+            "the trace itself reports (human_speed) in place of the envelope's "
+            f"{'declared' if envelope.approach_speed_declared else 'default'} "
+            f"{fallback:.0f} mm/s. The lowest reported value was {min(sensed_speeds):g} "
+            f"mm/s, and {below} of those samples reported less than {fallback:.0f} "
+            "mm/s. A reported closing speed below the declared one shortens Sh and can "
+            "turn a failing separation into a passing one; this check cannot tell a "
+            "person who is standing still from a sensor that reports zero, and the "
+            "envelope carries no evidence basis for a sensed figure."
         )
 
     if violations:
@@ -963,6 +1009,7 @@ def verify(
     recorder_trust: RecorderTrust | None = None,
     machine_serial: str = "",
     now: datetime | None = None,
+    engine_version: str = ENGINE_VERSION,
 ) -> VerificationResult:
     """Check one run against one envelope.
 
@@ -978,16 +1025,25 @@ def verify(
     ``now`` is the moment of verification, used only to judge whether an input is
     dated in the future; it defaults to the clock.
 
+    ``engine_version`` is the engine whose rules to apply (default: the newest). It exists
+    so a checker can re-run a bundle under the rules of the engine that sealed it
+    (:func:`is_runnable_engine`); sealing always uses the newest.
+
     The returned tier is the weakest of everything the verdict rests on. It is
     computed, never passed in, because a tier a caller can assert is a tier that
     will be asserted.
     """
+    if not is_runnable_engine(engine_version):
+        raise AssuranceError(
+            f"engine {engine_version!r} cannot be run by this build, which runs engines "
+            f"{OLDEST_RUNNABLE_ENGINE} to {ENGINE_VERSION}.")
+    engine = int(engine_version)
     checks: list[CheckResult] = []
     caveats: list[str] = []
 
     checks.append(_workspace_containment(envelope, trace))
     checks.append(_speed_limit(envelope, trace))
-    ssm, ssm_caveats = _ssm_separation(envelope, trace)
+    ssm, ssm_caveats = _ssm_separation(envelope, trace, engine)
     checks.append(ssm)
     caveats.extend(ssm_caveats)
     checks.append(_stop_characterisation(envelope, trace))
@@ -1081,7 +1137,7 @@ def verify(
         product_version=envelope.product_version,
         trace_id=trace.trace_id,
         provenance=trace.provenance.value,
-        engine_version=ENGINE_VERSION,
+        engine_version=engine_version,
         checks=tuple(checks),
         checks_skipped=tuple(caveats),
         tier=tier,

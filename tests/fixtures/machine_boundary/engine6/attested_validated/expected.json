@@ -1,0 +1,103 @@
+{
+  "alone": {
+    "believed_tier": "community",
+    "internally_consistent": true,
+    "level": "integrity_only",
+    "limitations": [
+      "NOT CHECKED: the original envelope and trace were not supplied, so only the bundle's internal integrity was confirmed. Nothing here shows the machine behaved as the bundle says.",
+      "NOT CHECKED: the bundle records provenance_basis 'recorder_attested' (a signed recorder attestation) and no recorder trust list was supplied, so the attestation was not assessed and the re-run was not performed. It is NOT believed: for this check the trace's provenance is treated as declared by the filer and the tier as capped at community. Supply --recorder-trust with keys you obtained independently of this bundle."
+    ],
+    "ok": true,
+    "problems": [],
+    "provenance_basis": "recorder_attested",
+    "provenance_reassessed": "unverifiable",
+    "reassessment_note": "",
+    "replayed": false,
+    "seal_intact": true,
+    "verified": [
+      "the sealed evidence object still hashes to the hash it carries",
+      "the recorded checks are exactly the 8 that engine '6' produces, none missing, none invented",
+      "the recorded verdict 'pass' agrees with the bundle's own 8 checks (0 violated, 0 unchecked)",
+      "the recorded tier 'validated' is one the engine can produce from the recorded provenance 'field' (not 'certified', not above that provenance's ceiling)",
+      "the unsealed result block agrees with the sealed verdict, tier, provenance, checks and stated limitations",
+      "the envelope copy in the bundle hashes to the envelope hash sealed inside the evidence",
+      "the recorded tier is not above the ceiling ('validated') that the envelope copy in the bundle allows"
+    ]
+  },
+  "alone_with_trust": {
+    "believed_tier": "community",
+    "internally_consistent": true,
+    "level": "integrity_only",
+    "limitations": [
+      "NOT CHECKED: the original envelope and trace were not supplied, so only the bundle's internal integrity was confirmed. Nothing here shows the machine behaved as the bundle says."
+    ],
+    "ok": true,
+    "problems": [],
+    "provenance_basis": "recorder_attested",
+    "provenance_reassessed": "reproduced",
+    "reassessment_note": "attestation re-assessed; checks not re-run",
+    "replayed": false,
+    "seal_intact": true,
+    "verified": [
+      "the sealed evidence object still hashes to the hash it carries",
+      "the recorded checks are exactly the 8 that engine '6' produces, none missing, none invented",
+      "the recorded verdict 'pass' agrees with the bundle's own 8 checks (0 violated, 0 unchecked)",
+      "the recorded tier 'validated' is one the engine can produce from the recorded provenance 'field' (not 'certified', not above that provenance's ceiling)",
+      "the unsealed result block agrees with the sealed verdict, tier, provenance, checks and stated limitations",
+      "the envelope copy in the bundle hashes to the envelope hash sealed inside the evidence",
+      "the recorded tier is not above the ceiling ('validated') that the envelope copy in the bundle allows",
+      "the recorded recorder attestation is accepted under the recorder trust list you supplied (key 661b914f91351b6a); the recording window was not compared because the original trace was not supplied (the trace hash it signs was)"
+    ]
+  },
+  "generated_from": "git 2b41ddb (unchanged main), engine 6",
+  "note": "recorder-attested: validated when re-assessed under the trust list in the fixture",
+  "recorded_tier": "validated",
+  "verdict": "pass",
+  "with_originals": {
+    "believed_tier": "community",
+    "internally_consistent": true,
+    "level": "integrity_only",
+    "limitations": [
+      "NOT CHECKED: the bundle records provenance_basis 'recorder_attested' (a signed recorder attestation) and no recorder trust list was supplied, so the attestation was not assessed and the re-run was not performed. It is NOT believed: for this check the trace's provenance is treated as declared by the filer and the tier as capped at community. Supply --recorder-trust with keys you obtained independently of this bundle."
+    ],
+    "ok": true,
+    "problems": [],
+    "provenance_basis": "recorder_attested",
+    "provenance_reassessed": "unverifiable",
+    "reassessment_note": "",
+    "replayed": false,
+    "seal_intact": true,
+    "verified": [
+      "the sealed evidence object still hashes to the hash it carries",
+      "the recorded checks are exactly the 8 that engine '6' produces, none missing, none invented",
+      "the recorded verdict 'pass' agrees with the bundle's own 8 checks (0 violated, 0 unchecked)",
+      "the recorded tier 'validated' is one the engine can produce from the recorded provenance 'field' (not 'certified', not above that provenance's ceiling)",
+      "the unsealed result block agrees with the sealed verdict, tier, provenance, checks and stated limitations",
+      "the envelope copy in the bundle hashes to the envelope hash sealed inside the evidence",
+      "the recorded tier is not above the ceiling ('validated') that the envelope copy in the bundle allows"
+    ]
+  },
+  "with_originals_and_trust": {
+    "believed_tier": "validated",
+    "internally_consistent": true,
+    "level": "reproduced",
+    "limitations": [],
+    "ok": true,
+    "problems": [],
+    "provenance_basis": "recorder_attested",
+    "provenance_reassessed": "reproduced",
+    "reassessment_note": "",
+    "replayed": true,
+    "seal_intact": true,
+    "verified": [
+      "the sealed evidence object still hashes to the hash it carries",
+      "the recorded checks are exactly the 8 that engine '6' produces, none missing, none invented",
+      "the recorded verdict 'pass' agrees with the bundle's own 8 checks (0 violated, 0 unchecked)",
+      "the recorded tier 'validated' is one the engine can produce from the recorded provenance 'field' (not 'certified', not above that provenance's ceiling)",
+      "the unsealed result block agrees with the sealed verdict, tier, provenance, checks and stated limitations",
+      "the envelope copy in the bundle hashes to the envelope hash sealed inside the evidence",
+      "the recorded tier is not above the ceiling ('validated') that the envelope copy in the bundle allows",
+      "re-running engine '6' on the supplied envelope and trace reproduces every sealed check, the verdict, tier, provenance, trace identity and start time, the stated limitations and the confidence"
+    ]
+  }
+}

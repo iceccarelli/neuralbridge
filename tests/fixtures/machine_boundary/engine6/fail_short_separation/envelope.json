@@ -1,0 +1,51 @@
+{
+  "declared_by": {
+    "identifier": "",
+    "kind": "person",
+    "role": ""
+  },
+  "envelope_id": "ENV-1",
+  "human_approach_speed_mm_s": null,
+  "intrusion_distance_mm": 850.0,
+  "max_tcp_speed_mm_s": {
+    "pfl": 250.0,
+    "ssm": 500.0
+  },
+  "notes": "",
+  "pfl_limits_hash": "",
+  "product": "Cell",
+  "product_version": "1.0.0",
+  "stop": {
+    "basis": {
+      "date": "2026-03-11",
+      "kind": "measured",
+      "reference": "STOP-TEST-1"
+    },
+    "measured_at_speed_mm_s": 500.0,
+    "reaction_time_s": 0.1,
+    "stop_distance_mm": 120.0,
+    "stop_time_s": 0.25
+  },
+  "uncertainty": {
+    "basis": {
+      "date": "2026-03-11",
+      "kind": "measured",
+      "reference": "STOP-TEST-1"
+    },
+    "human_position_mm": 100.0,
+    "robot_position_mm": 50.0
+  },
+  "workspace": {
+    "frame": "cell",
+    "maximum": [
+      1000.0,
+      1000.0,
+      2000.0
+    ],
+    "minimum": [
+      -1000.0,
+      -1000.0,
+      0.0
+    ]
+  }
+}

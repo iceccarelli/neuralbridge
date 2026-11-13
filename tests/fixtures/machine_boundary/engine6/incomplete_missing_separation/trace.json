@@ -1,0 +1,310 @@
+{
+  "conditions": {},
+  "provenance": "field",
+  "sample_rate_hz": 50.0,
+  "samples": [
+    {
+      "body_region": "",
+      "contact_area": null,
+      "contact_force": null,
+      "human_speed": null,
+      "mode": "ssm",
+      "separation": 3000.0,
+      "t": 0.0,
+      "tcp": [
+        0.0,
+        0.0,
+        1000.0
+      ],
+      "tcp_speed": 300.0
+    },
+    {
+      "body_region": "",
+      "contact_area": null,
+      "contact_force": null,
+      "human_speed": null,
+      "mode": "ssm",
+      "separation": 3000.0,
+      "t": 0.02,
+      "tcp": [
+        0.0,
+        0.0,
+        1000.0
+      ],
+      "tcp_speed": 300.0
+    },
+    {
+      "body_region": "",
+      "contact_area": null,
+      "contact_force": null,
+      "human_speed": null,
+      "mode": "ssm",
+      "separation": 3000.0,
+      "t": 0.04,
+      "tcp": [
+        0.0,
+        0.0,
+        1000.0
+      ],
+      "tcp_speed": 300.0
+    },
+    {
+      "body_region": "",
+      "contact_area": null,
+      "contact_force": null,
+      "human_speed": null,
+      "mode": "ssm",
+      "separation": 3000.0,
+      "t": 0.06,
+      "tcp": [
+        0.0,
+        0.0,
+        1000.0
+      ],
+      "tcp_speed": 300.0
+    },
+    {
+      "body_region": "",
+      "contact_area": null,
+      "contact_force": null,
+      "human_speed": null,
+      "mode": "ssm",
+      "separation": 3000.0,
+      "t": 0.08,
+      "tcp": [
+        0.0,
+        0.0,
+        1000.0
+      ],
+      "tcp_speed": 300.0
+    },
+    {
+      "body_region": "",
+      "contact_area": null,
+      "contact_force": null,
+      "human_speed": null,
+      "mode": "ssm",
+      "separation": 3000.0,
+      "t": 0.1,
+      "tcp": [
+        0.0,
+        0.0,
+        1000.0
+      ],
+      "tcp_speed": 300.0
+    },
+    {
+      "body_region": "",
+      "contact_area": null,
+      "contact_force": null,
+      "human_speed": null,
+      "mode": "ssm",
+      "separation": 3000.0,
+      "t": 0.12,
+      "tcp": [
+        0.0,
+        0.0,
+        1000.0
+      ],
+      "tcp_speed": 300.0
+    },
+    {
+      "body_region": "",
+      "contact_area": null,
+      "contact_force": null,
+      "human_speed": null,
+      "mode": "ssm",
+      "separation": null,
+      "t": 0.14,
+      "tcp": [
+        0.0,
+        0.0,
+        1000.0
+      ],
+      "tcp_speed": 300.0
+    },
+    {
+      "body_region": "",
+      "contact_area": null,
+      "contact_force": null,
+      "human_speed": null,
+      "mode": "ssm",
+      "separation": 3000.0,
+      "t": 0.16,
+      "tcp": [
+        0.0,
+        0.0,
+        1000.0
+      ],
+      "tcp_speed": 300.0
+    },
+    {
+      "body_region": "",
+      "contact_area": null,
+      "contact_force": null,
+      "human_speed": null,
+      "mode": "ssm",
+      "separation": 3000.0,
+      "t": 0.18,
+      "tcp": [
+        0.0,
+        0.0,
+        1000.0
+      ],
+      "tcp_speed": 300.0
+    },
+    {
+      "body_region": "",
+      "contact_area": null,
+      "contact_force": null,
+      "human_speed": null,
+      "mode": "ssm",
+      "separation": 3000.0,
+      "t": 0.2,
+      "tcp": [
+        0.0,
+        0.0,
+        1000.0
+      ],
+      "tcp_speed": 300.0
+    },
+    {
+      "body_region": "",
+      "contact_area": null,
+      "contact_force": null,
+      "human_speed": null,
+      "mode": "ssm",
+      "separation": 3000.0,
+      "t": 0.22,
+      "tcp": [
+        0.0,
+        0.0,
+        1000.0
+      ],
+      "tcp_speed": 300.0
+    },
+    {
+      "body_region": "",
+      "contact_area": null,
+      "contact_force": null,
+      "human_speed": null,
+      "mode": "ssm",
+      "separation": 3000.0,
+      "t": 0.24,
+      "tcp": [
+        0.0,
+        0.0,
+        1000.0
+      ],
+      "tcp_speed": 300.0
+    },
+    {
+      "body_region": "",
+      "contact_area": null,
+      "contact_force": null,
+      "human_speed": null,
+      "mode": "ssm",
+      "separation": 3000.0,
+      "t": 0.26,
+      "tcp": [
+        0.0,
+        0.0,
+        1000.0
+      ],
+      "tcp_speed": 300.0
+    },
+    {
+      "body_region": "",
+      "contact_area": null,
+      "contact_force": null,
+      "human_speed": null,
+      "mode": "ssm",
+      "separation": 3000.0,
+      "t": 0.28,
+      "tcp": [
+        0.0,
+        0.0,
+        1000.0
+      ],
+      "tcp_speed": 300.0
+    },
+    {
+      "body_region": "",
+      "contact_area": null,
+      "contact_force": null,
+      "human_speed": null,
+      "mode": "ssm",
+      "separation": 3000.0,
+      "t": 0.3,
+      "tcp": [
+        0.0,
+        0.0,
+        1000.0
+      ],
+      "tcp_speed": 300.0
+    },
+    {
+      "body_region": "",
+      "contact_area": null,
+      "contact_force": null,
+      "human_speed": null,
+      "mode": "ssm",
+      "separation": 3000.0,
+      "t": 0.32,
+      "tcp": [
+        0.0,
+        0.0,
+        1000.0
+      ],
+      "tcp_speed": 300.0
+    },
+    {
+      "body_region": "",
+      "contact_area": null,
+      "contact_force": null,
+      "human_speed": null,
+      "mode": "ssm",
+      "separation": 3000.0,
+      "t": 0.34,
+      "tcp": [
+        0.0,
+        0.0,
+        1000.0
+      ],
+      "tcp_speed": 300.0
+    },
+    {
+      "body_region": "",
+      "contact_area": null,
+      "contact_force": null,
+      "human_speed": null,
+      "mode": "ssm",
+      "separation": 3000.0,
+      "t": 0.36,
+      "tcp": [
+        0.0,
+        0.0,
+        1000.0
+      ],
+      "tcp_speed": 300.0
+    },
+    {
+      "body_region": "",
+      "contact_area": null,
+      "contact_force": null,
+      "human_speed": null,
+      "mode": "ssm",
+      "separation": 3000.0,
+      "t": 0.38,
+      "tcp": [
+        0.0,
+        0.0,
+        1000.0
+      ],
+      "tcp_speed": 300.0
+    }
+  ],
+  "source_system": "fw",
+  "started_at": "2026-09-12T04:31:00Z",
+  "trace_id": "RUN-1"
+}

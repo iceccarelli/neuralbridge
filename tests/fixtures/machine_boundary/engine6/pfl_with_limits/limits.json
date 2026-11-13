@@ -1,0 +1,15 @@
+{
+  "edition": "Example 2016",
+  "regions": {
+    "hand": {
+      "label": "Hand",
+      "max_force_n": 140.0,
+      "max_pressure_n_cm2": 260.0
+    }
+  },
+  "schema": "assurance.machine.limits/1",
+  "transcribed_by": "a",
+  "transient_multiplier": 2.0,
+  "verified_by": "b",
+  "verified_on": "2026-04-01"
+}

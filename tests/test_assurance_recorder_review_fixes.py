@@ -298,7 +298,7 @@ class TestUnknownEngineVersions:
         del raw["result"]                     # isolate coherence from the printed result
         return reseal(raw)
 
-    @pytest.mark.parametrize("version", ["7", "٦", "06", " 6", "6 ", "0", "0-old", "", "6.0",
+    @pytest.mark.parametrize("version", ["8", "٦", "06", " 6", "6 ", "0", "0-old", "", "6.0",
                                          "٥", "1e1"])
     def test_an_unknown_engine_does_not_skip_the_completeness_test(self, version):
         raw, _, _ = self._declared()
@@ -306,7 +306,7 @@ class TestUnknownEngineVersions:
         assert not res.ok, version
         assert any("unknown engine" in p for p in res.problems), res.problems
 
-    @pytest.mark.parametrize("version", ["٦", "7", "06"])
+    @pytest.mark.parametrize("version", ["٦", "8", "06"])
     def test_an_attested_bundle_naming_an_unknown_engine_is_rejected(self, version):
         raw, _, _ = sealed()
         raw["evidence"]["body"]["engine_version"] = version

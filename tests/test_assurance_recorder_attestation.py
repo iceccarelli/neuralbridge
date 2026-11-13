@@ -726,7 +726,7 @@ class TestSealedAndReassessed:
         raw, env, tr = sealed()
         body = raw["evidence"]["body"]
         rec = body["recorder_attestation"]
-        assert body["engine_version"] == ENGINE_VERSION == "6"
+        assert body["engine_version"] == ENGINE_VERSION == "7"
         assert body["provenance_basis"] == "recorder_attested" and body["tier"] == "validated"
         assert rec["status"] == "accepted" and rec["attested"] is True
         assert rec["key_fingerprint"] == RECORDER.fingerprint
@@ -963,15 +963,15 @@ class TestVersioning:
         raw["evidence"]["body"]["engine_version"] = raw["result"]["engine_version"] = "5"
         reseal(raw)
         res = check_bundle_data(raw, envelope=env, trace=tr)
-        assert not res.ok and any("engine '5'" in p and "engine '6'" in p for p in res.problems)
+        assert not res.ok and any("engine '5'" in p and "engine '7'" in p for p in res.problems)
 
     def test_an_upgraded_engine_field_on_a_declared_bundle_is_caught_on_replay(self):
         env, tr = envelope(), make_trace()
         raw = json.loads(json.dumps(build_bundle(env, tr, actor=ACTOR).to_dict()))
-        raw["evidence"]["body"]["engine_version"] = raw["result"]["engine_version"] = "7"
+        raw["evidence"]["body"]["engine_version"] = raw["result"]["engine_version"] = "8"
         reseal(raw)
         res = check_bundle_data(raw, envelope=env, trace=tr)
-        assert not res.ok and any("engine '7'" in p for p in res.problems)
+        assert not res.ok and any("engine '8'" in p for p in res.problems)
 
     def test_the_ledger_consumers_do_not_believe_an_older_engines_validated_tier(self):
         from assurance.machinery.staleness import _believed_tier

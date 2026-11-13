@@ -66,9 +66,11 @@ from assurance.machine.trace import (
 )
 from assurance.machine.verify import (
     ENGINE_VERSION,
+    OLDEST_RUNNABLE_ENGINE,
     Verdict,
     VerificationResult,
     is_known_engine,
+    is_runnable_engine,
     parse_engine_version,
     verify,
 )
@@ -455,9 +457,9 @@ def _checks_by_name(checks: Any) -> dict[str, Any]:
     return {str(c.get("name")): c for c in checks if isinstance(c, dict)}
 
 
-@lru_cache(maxsize=1)
-def _standard_check_names() -> tuple[str, ...] | None:
-    """The names of the checks the engine produces, asked of the engine itself.
+@lru_cache(maxsize=8)
+def _standard_check_names(engine: str = ENGINE_VERSION) -> tuple[str, ...] | None:
+    """The names of the checks ``engine`` produces, asked of the engine itself.
 
     The engine returns every one of its checks on every run (a check that does not
     apply is ``not_applicable``, never absent), so running it once over the
@@ -487,7 +489,8 @@ def _standard_check_names() -> tuple[str, ...] | None:
                        mode=OperatingMode.STOPPED)
                 for i in range(2)),
         )
-        return tuple(c.name for c in verify(probe_envelope, probe_trace).checks)
+        return tuple(c.name for c in verify(
+            probe_envelope, probe_trace, engine_version=engine).checks)
     except (AssuranceError, ValueError, TypeError, KeyError):
         return None
 
@@ -508,12 +511,12 @@ def _check_set_problems(
             "cannot place is not a reason to skip the test that the recorded checks are "
             "the complete set, so the bundle is rejected rather than passed unchecked."
         ], [], []
-    if engine != ENGINE_VERSION:
+    if not is_runnable_engine(engine):
         return [], [
             f"NOT CHECKED: the bundle was produced by engine {engine!r}, whose set of "
             f"checks this verifier ({ENGINE_VERSION!r}) does not know, so whether the "
             "recorded checks are the complete set was not checked."], []
-    standard = _standard_check_names()
+    standard = _standard_check_names(str(engine))
     if standard is None:
         return [], [
             "NOT CHECKED: this verifier could not work out the set of checks the "
@@ -536,15 +539,15 @@ def _check_set_problems(
     if missing:
         problems.append(
             f"the bundle omits check(s) {', '.join(map(repr, missing))}, which engine "
-            f"{ENGINE_VERSION!r} always produces; a verification with a check "
+            f"{engine!r} always produces; a verification with a check "
             "removed is not the verification the engine runs.")
     if extra:
         problems.append(
             f"the bundle records check(s) {', '.join(map(repr, extra))}, which engine "
-            f"{ENGINE_VERSION!r} does not produce.")
+            f"{engine!r} does not produce.")
     verified = [] if problems else [
         f"the recorded checks are exactly the {len(standard)} that engine "
-        f"{ENGINE_VERSION!r} produces, none missing, none invented"]
+        f"{engine!r} produces, none missing, none invented"]
     return problems, [], verified
 
 
@@ -1033,11 +1036,13 @@ def check_bundle_data(
             "machine behaved as the bundle says."
         ))
     elif inputs_match:
-        if body.get("engine_version") != ENGINE_VERSION:
+        if not is_runnable_engine(body.get("engine_version")):
             problems.append(
                 f"the bundle was produced by engine {body.get('engine_version')!r} and "
-                f"this is engine {ENGINE_VERSION!r}; a re-run under different rules is "
-                "not a reproduction. Check it with the engine that produced it."
+                f"this is engine {ENGINE_VERSION!r} (which re-runs engines "
+                f"{OLDEST_RUNNABLE_ENGINE} to {ENGINE_VERSION} only); a re-run under "
+                "different rules is not a reproduction. Check it with the engine that "
+                "produced it."
             )
         elif _review_accepted(body) and review_trust is None:
             limitations.insert(0, (
@@ -1062,7 +1067,10 @@ def check_bundle_data(
                     envelope, trace, limits=limits,
                     limits_reviews=_recorded_reviews(body), review_trust=review_trust,
                     recorder_attestations=_recorded_attestations(body),
-                    recorder_trust=recorder_trust, machine_serial=serial, now=as_of)
+                    recorder_trust=recorder_trust, machine_serial=serial, now=as_of,
+                    # The engine that sealed the bundle, not the newest: a re-run under
+                    # different rules is not a reproduction.
+                    engine_version=str(body.get("engine_version")))
             except AssuranceError as exc:
                 problems.append(f"re-running the engine on the supplied inputs failed: "
                                 f"{exc}")
@@ -1119,7 +1127,8 @@ def check_bundle_data(
     reproduced = ok and replayed
     if reproduced:
         verified.append(
-            f"re-running engine {ENGINE_VERSION!r} on the supplied envelope and trace"
+            f"re-running engine {str(body.get('engine_version'))!r} on the supplied "
+            "envelope and trace"
             + (" and limits table" if recorded_limits else "")
             + " reproduces every sealed check, the verdict, tier, provenance, trace "
             "identity and start time, the stated limitations and the confidence")
