@@ -240,11 +240,13 @@ class Awareness:
     that the emphasis is on prompt action to carry out that assessment — a
     slow assessment is not a lawful way to postpone a deadline.
 
-    This record exists because the reporting platform does not yet capture the
-    fact. The field for a vulnerability awareness timestamp is documented as
-    arriving in a future release, and the incident field currently records
-    *detection*, which is a different moment. Until that changes, this is the
-    only evidence of the fact every deadline is computed from.
+    This record exists because the fact every deadline runs from is the manufacturer's
+    judgement, with reasons, and the reporting platform's field for it is only a timestamp.
+    The pinned field specification (Glossary v1.3) described the vulnerability field as not
+    yet available and the incident field as recording *detection*; the live Glossary v1.6
+    (21 October 2026, retrieved 2026-11-12) lists both as "become aware", Mandatory, with a
+    v26 description that still says "first detected". A human must diff and re-pin (see
+    ``srp.py``). Either way this record is the evidence of the moment and of the reasoning.
     """
 
     established_at: datetime

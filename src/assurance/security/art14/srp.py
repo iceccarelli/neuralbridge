@@ -18,8 +18,15 @@ Encoding the specification here does three things a checklist cannot:
 
 Source: ENISA, CRA SRP Glossary v1.3, 10 September 2026. That document is
 operational guidance rather than a legal instrument and has already changed
-version once; :data:`GLOSSARY_VERSION` is checked by the report so a stale
-build announces itself.
+version; :data:`GLOSSARY_VERSION` is printed by the report so a stale build
+announces itself.
+
+The pinned version is OLDER than the live glossary. On 2026-11-12 the page
+https://www.enisa.europa.eu/topics/product-security/single-reporting-platform-srp/cra-srp-glossary2
+showed v1.6 (last update 21 October 2026). This module has not been re-pinned: that needs a
+human to diff v1.3 against v1.6 (rows 7a and v26a of v1.6, for example, are not in
+:data:`FIELDS`) and decide what changes. Until then the field table, the required/optional
+pattern and the platform notes below describe v1.3 and may differ from the form.
 """
 
 from __future__ import annotations
@@ -170,8 +177,13 @@ FIELDS: tuple[FieldSpec, ...] = (
     FieldSpec("v25", "vulnerability_impact", "vulnerability", OPT, OPT, REQ, 4000),
     FieldSpec("v26", "awareness_datetime", "vulnerability", REQ, CAR, CAR, None,
               "The fact every deadline runs from.",
-              platform_gap="Documented as arriving in a future release of the platform. "
-                           "Until then the manufacturer's own record is the only evidence."),
+              platform_gap="Written against Glossary v1.3 (pinned here), which this module "
+                           "described as not yet capturing awareness. The live Glossary v1.6 (21 "
+                           "October 2026; https://www.enisa.europa.eu/topics/product-security/single-reporting-platform-srp/cra-srp-glossary2; retrieved 2026-11-12) lists 'Date and time when "
+                           "you become aware of the Actively Exploited Vulnerability' as "
+                           "Mandatory, while its description still says 'first detected'. A human "
+                           "must diff v1.3 against v1.6 and re-pin. Keep the awareness record "
+                           "either way: it is the evidence of the moment and the reasoning."),
     FieldSpec("v27", "malicious_actor", "vulnerability", OPT, OPT, IFA, 100,
               "100 characters. Name the actor; the analysis does not fit and is not asked for."),
     FieldSpec("v28", "particular_exceptional_circumstances", "vulnerability", NAP, OPT, NAP, None,
@@ -189,9 +201,12 @@ FIELDS: tuple[FieldSpec, ...] = (
     FieldSpec("i36", "threat_type_or_root_cause", "incident", OPT, OPT, REQ, 255),
     FieldSpec("i37", "awareness_datetime", "incident", REQ, REQ, CAR, None,
               "The fact every deadline runs from.",
-              platform_gap="The platform currently labels this field 'Date and time when the "
-                           "incident was detected'. Detection is not awareness; enter the "
-                           "awareness time and keep the reasoning."),
+              platform_gap="Written against Glossary v1.3 (pinned here), which this module "
+                           "described as labelling the field 'detected'. The live Glossary v1.6 "
+                           "(21 October 2026; https://www.enisa.europa.eu/topics/product-security/single-reporting-platform-srp/cra-srp-glossary2; retrieved 2026-11-12) labels it 'Date and time "
+                           "when you become aware of the incident (UTC time)', Mandatory. A human "
+                           "must diff v1.3 against v1.6 and re-pin. Detection is not awareness: "
+                           "enter the awareness time and keep the reasoning."),
     FieldSpec("i38", "incident_occurred_datetime", "incident", OPT, REQ, OPT, None),
     FieldSpec("i39", "initial_assessment", "incident", OPT, REQ, CAR, 4000),
 )

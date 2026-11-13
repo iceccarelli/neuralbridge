@@ -614,9 +614,11 @@ class Art14Register:
             confidence=Confidence.ESTABLISHED,
             checks_skipped=(
                 (
-                    "the reporting platform does not currently capture this fact for "
-                    "vulnerabilities, and records detection rather than awareness for incidents; "
-                    "this record is the compensating control"
+                    "the pinned platform field specification (Glossary v1.3) is older than the "
+                    "live glossary (v1.6, 21 October 2026), which lists an awareness field for "
+                    "both tracks; the field table has not been re-pinned and the platform has "
+                    "not been observed. This record is the evidence of the moment and of the "
+                    "reasoning either way"
                 ),
             ),
             expect_head=head,

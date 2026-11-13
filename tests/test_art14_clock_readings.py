@@ -480,3 +480,54 @@ class TestBasisBlock:
         assert f"clock rule version   {RULE_VERSION}" in register_report(reg, now=NOW)
         r = readiness_report(reg, now=NOW)
         assert r["clock_rule_version"] == RULE_VERSION and len(r["open_legal_questions"]) == 5
+
+
+# --------------------------------------------------------------------------------------------
+# F3: notes about the ENISA platform name their source, date and version, and do not overstate
+# --------------------------------------------------------------------------------------------
+GLOSSARY_URL = "https://www.enisa.europa.eu/topics/product-security/single-reporting-platform-srp/cra-srp-glossary2"
+FAQ_URL = ("https://www.enisa.europa.eu/topics/product-security/vulnerability-services/"
+           "eu-incident-response-and-cyber-crisis-management/single-reporting-platform-srp/"
+           "frequently-asked-questions")
+
+
+class TestPlatformNotes:
+    def test_the_faq_26_note_has_url_page_date_and_retrieval_date_and_is_not_called_a_defect(self):
+        import assurance.security.art14.clock as clock_module
+
+        submitted = parse_utc("2026-09-19T11:15:00Z")
+        d = Deadlines(track=Track.VULNERABILITY, awareness_at=AWARE, early_warning_submitted_at=submitted)
+        note = d.to_dict()["platform_counter"]["note"]
+        assert "FAQ 26" in note and FAQ_URL in note
+        assert "15 October 2026" in note and "2026-11-12" in note
+        assert "not observed the platform" in note and "legal deadline" in note
+        assert "defect" not in note.lower() and "defect" not in (clock_module.__doc__ or "").lower()
+        assert clock_module.PLATFORM_FAQ_URL == FAQ_URL
+
+    def test_the_pinned_glossary_is_still_v1_3_and_the_field_table_is_unchanged(self):
+        from assurance.security.art14 import srp
+
+        assert (srp.GLOSSARY_VERSION, srp.GLOSSARY_DATE) == ("1.3", "2026-09-10")   # a human re-pins
+        numbers = {f.number for f in srp.FIELDS}
+        assert "7a" not in numbers and "v26a" not in numbers and len(srp.FIELDS) == 39
+        assert "pinned version is OLDER" in (srp.__doc__ or "")
+        assert GLOSSARY_URL in (srp.__doc__ or "") and "v1.6" in (srp.__doc__ or "")
+
+    def test_the_awareness_field_notes_name_v1_6_and_say_a_human_must_re_pin(self):
+        from assurance.security.art14.srp import FIELDS
+
+        for number, label in (("v26", "Actively Exploited Vulnerability"), ("i37", "(UTC time)")):
+            gap = next(f for f in FIELDS if f.number == number).platform_gap
+            assert GLOSSARY_URL in gap and "v1.6" in gap and "21 October 2026" in gap
+            assert "2026-11-12" in gap and "must diff" in gap and "re-pin" in gap and label in gap
+            assert "future release" not in gap and "currently labels" not in gap
+
+    def test_the_sealed_awareness_note_does_not_claim_the_platform_lacks_the_field(self, tmp_path):
+        reg = open_case(tmp_path, Track.VULNERABILITY)
+        skipped = " ".join(
+            e.payload["checks_skipped"] if isinstance(e.payload.get("checks_skipped"), str)
+            else " ".join(e.payload.get("checks_skipped", []))
+            for e in reg.ledger.entries(subject="c1") if e.kind == "art14.awareness"
+        )
+        assert "v1.6" in skipped and "re-pinned" in skipped
+        assert "does not currently capture" not in skipped and "records detection" not in skipped

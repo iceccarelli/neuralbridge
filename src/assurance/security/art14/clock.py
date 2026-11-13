@@ -24,12 +24,14 @@ Two traps are encoded rather than commented:
   notification, not from awareness and not from remediation. Filing the 72-hour
   notification early therefore brings the final report forward.
 
-There is also a defect in the reporting platform itself worth surfacing to a
-user rather than silently disagreeing with: in the current release the 72-hour
-counter is displayed as 48 hours after submission of the early warning, so the
-platform can show a notification as overdue while it is still in time.
-:func:`platform_displayed_notification_due` computes what the platform will
-show, so a case view can display both and explain the difference.
+ENISA documents a behaviour of the reporting platform that a user should be shown
+rather than silently disagreed with: in the release described by its FAQ 26 the
+72-hour counter displays a due time 48 hours after submission of the early warning,
+so the platform can show a notification as overdue while it is still in time
+(source below). :func:`platform_displayed_notification_due` computes what the platform
+is documented to show, so a case view can display both and explain the difference.
+That is ENISA's description of one release as retrieved on the date below; this
+software has not observed the platform and does not know whether it has changed.
 """
 
 from __future__ import annotations
@@ -49,6 +51,7 @@ __all__ = [
     "NOTIFICATION_HOURS",
     "VULNERABILITY_FINAL_DAYS",
     "OPEN_LEGAL_QUESTIONS",
+    "PLATFORM_FAQ_URL",
     "RULE_HISTORY",
     "RULE_VERSION",
     "Deadline",
@@ -63,9 +66,16 @@ EARLY_WARNING_HOURS = 24          # Art. 14(2)(a), 14(4)(a)
 NOTIFICATION_HOURS = 72           # Art. 14(2)(b), 14(4)(b)
 VULNERABILITY_FINAL_DAYS = 14     # Art. 14(2)(c)
 
-#: ENISA CRA SRP FAQ 26: the displayed 72-hour counter is computed as this many
-#: hours after submission of the early warning, not from awareness.
+#: ENISA CRA SRP FAQ 26 ("How are the 72-hour and Final Report counters calculated?"), as
+#: documented by ENISA: "In the current release, the 72-hour counter displays a due date/time
+#: 48hrs after submission of the 24-hour Early Warning", to be changed "in a future release".
+#: Source: PLATFORM_FAQ_URL below, page "Updated: 15 October 2026", retrieved 2026-11-12.
+#: The displayed 72-hour counter is computed as this many hours after submission of the early
+#: warning, not from awareness.
 _PLATFORM_COUNTER_OFFSET_HOURS = 48
+PLATFORM_FAQ_URL = (
+    "https://www.enisa.europa.eu/topics/product-security/vulnerability-services/eu-incident-response-and-cyber-crisis-management/single-reporting-platform-srp/frequently-asked-questions"
+)
 
 #: Version of the counting rules in this module. Bump it, and add a line to :data:`RULE_HISTORY`,
 #: whenever a change here can alter the due time of ANY deadline for ANY input. It is printed in
@@ -703,9 +713,12 @@ class Deadlines:
                 "legal_notification_due": format_utc(legal),
                 "agrees": shown == legal,
                 "note": (
-                    "ENISA CRA SRP FAQ 26: in the current release the 72-hour counter is "
-                    "displayed as 48 hours after submission of the early warning rather than "
-                    "72 hours after awareness. Where these differ, the legal deadline governs."
+                    "ENISA CRA SRP FAQ 26, as documented by ENISA (page updated 15 October "
+                    "2026, retrieved 2026-11-12, " + PLATFORM_FAQ_URL + "): in the release it "
+                    "describes, the 72-hour counter is displayed as 48 hours after submission of "
+                    "the early warning rather than 72 hours after awareness. This software has "
+                    "not observed the platform. Where the two differ, the legal deadline "
+                    "(Art. 14) governs, not the platform's counter."
                 ),
             }
         return d
