@@ -1158,6 +1158,14 @@ def check_bundle_data(
             "provenance_basis 'recorder_attested' for the attestation the bundle records.")
 
     sealing_engine = parse_engine_version(body.get("engine_version"))
+    if (sealing_engine is not None and sealing_engine >= FIRST_ENGINE_WITH_BOUNDARY
+            and not replayed):
+        limitations.append(
+            "NOT CHECKED: the boundary block (what was tested and not tested, the "
+            "assumptions, the scope and the human-review statement) is UNVERIFIED text "
+            "here: its shape and its statement that review is required were checked, its "
+            "content was not. Without the original envelope and trace a resealed edit of "
+            "its wording cannot be detected.")
     if (sealing_engine is not None and sealing_engine < int(ENGINE_VERSION)
             and is_runnable_engine(body.get("engine_version"))):
         limitations.insert(0, (

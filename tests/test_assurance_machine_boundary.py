@@ -748,3 +748,34 @@ class TestAnOlderEnginesBundleIsNotAWayAroundTheDisclosure:
         raw, env, tr = _sealed()
         c = check_bundle_data(raw, envelope=env, trace=tr)
         assert not any("predates" in n for n in c.limitations)
+
+
+class TestTheBoundaryShapeIsEnforcedWithoutTheOriginals:
+    def _forge(self, edit):
+        raw, _, _ = _sealed()
+        edit(raw["evidence"]["body"]["boundary"])
+        del raw["result"]
+        return check_bundle_data(reseal(raw))
+
+    @pytest.mark.parametrize("edit", [
+        lambda b: b.__setitem__("not_tested", []),
+        lambda b: b.__setitem__("tested", []),
+        lambda b: b.__setitem__("valid_for", ""),
+        lambda b: b.__setitem__("valid_for", 7),
+        lambda b: b["human_review"].__setitem__("reasons", [7]),
+        lambda b: b["human_review"].__setitem__("reasons", [""]),
+        lambda b: b["human_review"].__setitem__("reasons", ["ok", {"x": 1}]),
+    ], ids=["no-not_tested", "no-tested", "empty-valid_for", "int-valid_for",
+            "int-reason", "empty-reason", "dict-reason"])
+    def test_a_resealed_malformed_block_is_rejected(self, edit):
+        c = self._forge(edit)
+        assert not c.ok and any("boundary block" in p for p in c.problems), c.problems
+
+    def test_the_integrity_only_answer_says_the_boundary_text_is_unverified(self):
+        raw, env, tr = _sealed()
+        alone = check_bundle_data(raw)
+        assert alone.ok and alone.level == "integrity_only"
+        assert any("boundary" in n and "unverified" in n.lower() for n in alone.limitations)
+        replayed = check_bundle_data(raw, envelope=env, trace=tr)
+        assert not any("boundary" in n and "unverified" in n.lower()
+                       for n in replayed.limitations)
