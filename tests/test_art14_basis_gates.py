@@ -6,7 +6,9 @@ F4: ``record_measure_available`` starts the 14-day legal clock and ``record_user
     and a legacy / hand-written record of either kind by a non-person is flagged on the case.
     Binding these two HTTP routes to a decider operator's credential is a larger entitlement
     change and is deliberately not made here.
-F7: SRP field 5 (see ``tests/test_art14_field5.py`` classes below).
+F7: SRP field 5 (``member_states_available``) is only submittable with at least one EU Member State
+    code, in a list; EEA-only lists and non-list values are blocking; "EL" is read as Greece with an
+    advisory, never silently accepted.
 """
 
 from __future__ import annotations
@@ -20,10 +22,10 @@ from fastapi.testclient import TestClient
 from assurance.core import Actor
 from assurance.core.identity import format_utc
 from assurance.evidence import EvidenceLedger
-from assurance.security.art14 import Art14Register, CaseError
+from assurance.security.art14 import Art14Register, CaseError, Stage, Track, validate_payload
 from assurance.security.art14.model import CASE_KIND
 
-from .test_art14_semantics import AWARE, BOT, KEY, NOW, PERSON, make
+from .test_art14_semantics import AWARE, BOT, EW, KEY, NOW, PERSON, make
 
 NOT_PEOPLE = [
     Actor("monitor-1", "watcher", kind="automation"),
@@ -151,3 +153,64 @@ class TestOverHttp:
             "at": "2026-09-19T08:00:00Z", "scope": "all", "content": "c",
             "actor": {"identifier": "Maria Rossi"}})
         assert u.status_code == 201, u.text
+
+
+def _field5(value, track=Track.VULNERABILITY, stage=Stage.EARLY_WARNING):
+    """Validate an otherwise complete early warning whose field 5 is ``value``."""
+    v = validate_payload({**EW, "member_states_available": value}, track, stage)
+    return v, [i for i in v.issues if i.field_name == "member_states_available"]
+
+
+class TestFieldFiveNeedsAnEuMemberState:
+    @pytest.mark.parametrize("value", [["NO"], ["IS", "LI"], ["NO", "IS", "LI"]])
+    def test_an_eea_only_list_is_not_submittable(self, value):
+        v, issues = _field5(value)
+        blocking = [i for i in issues if i.severity == "blocking"]
+        assert not v.submittable and blocking
+        assert "no EU Member State listed" in blocking[0].message
+        assert any("EEA" in i.message for i in issues)           # and the EEA advisory still shows
+
+    @pytest.mark.parametrize("value", ["Atlantis", "DE, FR", "Germany", {"DE": "yes"}, {"a": "DE"}, 5])
+    def test_a_non_list_value_is_blocking_and_not_guessed_at(self, value):
+        v, issues = _field5(value)
+        assert not v.submittable
+        assert any(i.severity == "blocking" and "expected a list" in i.message for i in issues), issues
+
+    @pytest.mark.parametrize("value", [[], [" "], None, ""])
+    def test_an_empty_or_missing_value_is_still_blocking(self, value):
+        assert not _field5(value)[0].submittable
+
+    def test_one_eu_member_state_is_enough_and_extra_eea_codes_stay_advisory(self):
+        v, issues = _field5(["DE", "NO"])
+        assert v.submittable
+        assert [i.severity for i in issues] == ["advisory"]
+        assert _field5(("GR",))[0].submittable
+
+    def test_el_is_read_as_greece_with_an_advisory_and_is_not_a_non_member(self):
+        v, issues = _field5(["EL"])
+        assert v.submittable
+        assert [i.severity for i in issues] == ["advisory"]
+        assert "read here as Greece" in issues[0].message and "GR" in issues[0].message
+        assert "not EU Member States" not in issues[0].message
+        assert _field5(["GR"])[1] == []
+
+    def test_a_malformed_or_unknown_code_is_still_blocking(self):
+        assert not _field5(["DE", "US"])[0].submittable
+        assert not _field5(["DE", "Germany"])[0].submittable
+
+    def test_the_message_does_not_say_this_is_the_only_content_the_article_requires(self):
+        _, issues = _field5(["NO"])
+        text = " ".join(i.message for i in issues)
+        assert "only substantive content" not in text and "'where applicable'" in text
+        assert "malicious acts" in text                      # 14(4)(a) has a second required item
+        from assurance.security.art14.model import ProductVersion
+
+        gap = ProductVersion(product_name="p", version_range="1").gaps()[0]
+        assert "only substantive content" not in gap
+
+    def test_the_unsubmittable_filing_is_recorded_incomplete_not_met(self, tmp_path):
+        reg = make(tmp_path)
+        reg.record_filing("c1", Stage.EARLY_WARNING, AWARE + timedelta(hours=2),
+                          {**EW, "member_states_available": ["NO"]}, PERSON, now=NOW)
+        d = reg.case("c1").deadlines.early_warning
+        assert d.status == "recorded_incomplete" and d.met is None

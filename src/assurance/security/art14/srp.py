@@ -148,7 +148,8 @@ FIELDS: tuple[FieldSpec, ...] = (
               "Read-only; generated from the registration."),
     FieldSpec("5", "member_states_available", "both", REQ, CAR, CAR, None,
               "The coordinating CSIRT's Member State is pre-filled; the rest must be added. "
-              "The only substantive content Art. 14(2)(a) requires at 24 hours."),
+              "Art. 14(2)(a) and 14(4)(a) ask for the Member States 'where applicable'; the "
+              "Glossary marks the field required for the early warning."),
     FieldSpec("6", "product_name", "both", REQ, CAR, CAR, 255),
     FieldSpec("7", "product_version", "both", REQ, CAR, CAR, 255),
     FieldSpec("8", "product_type", "both", OPT, CAR, CAR, None,
@@ -396,6 +397,17 @@ def validate_payload(
     # under time pressure, and an empty list is the commonest cause of a
     # 24-hour filing that cannot be completed.
     states = payload.get("member_states_available")
+    if _has_content(states) and not isinstance(states, (list, tuple)):
+        issues.append(
+            PayloadIssue(
+                "5",
+                "member_states_available",
+                "blocking",
+                f"expected a list of ISO 3166-1 alpha-2 Member State codes such as ['DE', 'FR'], "
+                f"got {type(states).__name__}. A name or a comma-separated string is not read "
+                "and is not guessed at.",
+            )
+        )
     if isinstance(states, (list, tuple)):
         malformed = [s for s in states if not (isinstance(s, str) and len(s) == 2 and s.isalpha())]
         if malformed:
@@ -421,16 +433,17 @@ def validate_payload(
                 )
             )
         # "EL" is the EU institutions' own code for Greece; ISO 3166-1 alpha-2 (which this field
-        # is checked against) uses "GR". Say that. Nothing here claims what the platform expects.
+        # is checked against) uses "GR". It is read as Greece and said so, never accepted silently.
+        # Nothing here claims what the platform expects: its form lists Member States by name.
         if "EL" in codes:
             issues.append(
                 PayloadIssue(
                     "5",
                     "member_states_available",
-                    "blocking",
-                    "'EL' is the EU institutions' own code for Greece; this check uses ISO 3166-1 "
-                    "alpha-2, where Greece is 'GR'. Use 'GR'. Which code the reporting platform "
-                    "itself expects has not been checked.",
+                    "advisory",
+                    "'EL' is the EU institutions' own code for Greece and is read here as Greece; "
+                    "this check uses ISO 3166-1 alpha-2, where Greece is 'GR'. Prefer 'GR'. How "
+                    "the reporting platform itself takes Greece has not been checked.",
                 )
             )
         unknown = sorted(codes - EU_MEMBER_STATES - EEA_NON_EU - {"EL"})
@@ -447,17 +460,21 @@ def validate_payload(
                 )
             )
         already_flagged = any(
-            i.field_number == "5" and i.message.startswith("required at this stage")
-            for i in issues
+            i.field_number == "5" and i.severity == "blocking" for i in issues
         )
-        if not codes and not already_flagged:
+        if not (codes & (EU_MEMBER_STATES | {"EL"})) and not already_flagged:
             issues.append(
                 PayloadIssue(
                     "5",
                     "member_states_available",
                     "blocking",
-                    "no Member States listed. This is the only substantive content "
-                    "Art. 14(2)(a) requires at 24 hours.",
+                    "no EU Member State listed. Art. 14(2)(a) and 14(4)(a) ask for the Member "
+                    "States where the manufacturer is aware the product has been made available "
+                    "'where applicable', and the Glossary marks this field required for the "
+                    "early warning; EEA states that are not EU Member States do not fill it. "
+                    "Art. 14(4)(a) also requires the incident early warning to say whether the "
+                    "incident is suspected of being caused by unlawful or malicious acts "
+                    "(field i31).",
                 )
             )
     skipped.append(

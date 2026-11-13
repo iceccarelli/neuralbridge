@@ -174,8 +174,8 @@ class ProductVersion:
         missing = []
         if not self.member_states:
             missing.append(
-                "member_states is empty — SRP field 5 cannot be completed, and it is the "
-                "only substantive content Art. 14(2)(a) requires at 24 hours"
+                "member_states is empty — SRP field 5 cannot be completed, and the Glossary marks "
+                "it required for the 24-hour early warning (Art. 14(2)(a): 'where applicable')"
             )
         if not self.version_range:
             missing.append("version_range is empty — SRP field 7 cannot be completed")
