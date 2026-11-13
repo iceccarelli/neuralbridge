@@ -94,6 +94,9 @@ class ItemOutcome:
     digest: str = ""
     rule_fingerprint: str = ""
     version: str = ""
+    #: Where the version label came from: the file it was extracted from, or ``"plan"`` when
+    #: the plan declares it as a literal. Empty when no version was found.
+    version_from: str = ""
     bytes_in: int = 0
     bytes_hashed: int = 0
     applied: dict[str, int] = field(default_factory=dict)
@@ -109,7 +112,7 @@ class ItemOutcome:
             "item_id": self.item_id, "status": self.status,
             "files": list(self.files), "digest": self.digest,
             "rule_fingerprint": self.rule_fingerprint, "version": self.version,
-            "bytes_in": self.bytes_in, "bytes_hashed": self.bytes_hashed,
+            "version_from": self.version_from, "bytes_in": self.bytes_in, "bytes_hashed": self.bytes_hashed,
             "applied": dict(sorted(self.applied.items())),
             "warnings": list(self.warnings), "detail": self.detail,
         }
@@ -253,6 +256,7 @@ def _collect_item(root: Path, spec: ItemSpec, deadline: float) -> ItemOutcome:
     bytes_in = 0
     bytes_hashed = 0
     version = ""
+    version_from = ""
     fingerprint = spec.rule.fingerprint()
 
     for path, name in zip(files, rel, strict=True):
@@ -287,6 +291,8 @@ def _collect_item(root: Path, spec: ItemSpec, deadline: float) -> ItemOutcome:
         warnings.extend(result.warnings)
         if not version and spec.version.kind != "unknown":
             version = _read_version(path, spec, warnings)
+            if version:
+                version_from = "plan" if spec.version.kind == "literal" else name
 
     if len(digests) == 1:
         digest = digests[0][1]
@@ -304,10 +310,26 @@ def _collect_item(root: Path, spec: ItemSpec, deadline: float) -> ItemOutcome:
 
     return ItemOutcome(
         item_id=spec.item_id, status="collected", files=rel, digest=digest,
-        rule_fingerprint=fingerprint, version=version, bytes_in=bytes_in,
+        rule_fingerprint=fingerprint, version=version, version_from=version_from,
+        bytes_in=bytes_in,
         bytes_hashed=bytes_hashed, applied=applied, warnings=tuple(warnings),
         detail=(f"{len(files)} files, hashed as a set" if len(files) > 1 else ""),
     )
+
+
+def _version_note(spec: ItemSpec, outcome: ItemOutcome) -> str:
+    """How the version label was obtained, in the item's notes: a label a plan declares is not a
+    label read from the file, and an advisory matched on it should be weighed accordingly. Notes
+    are outside the configuration hash, so this changes no digest and no comparison."""
+    if not outcome.version:
+        return ""
+    kind = spec.version.kind
+    if kind == "literal":
+        return " [version declared in plan, not read from file]"
+    if kind == "regex":
+        return (f" [version extracted by pattern {spec.version.value!r} "
+                f"from {outcome.version_from}]")
+    return f" [version read from key {spec.version.value!r} of {outcome.version_from}]"
 
 
 def collect(
@@ -376,6 +398,7 @@ def collect(
                   + f"[collected by plan {plan.plan_id} "
                     f"{plan.content_hash()[:12]}, rule {outcome.rule_fingerprint}"
                   + (f", {spec.rule.note}" if spec.rule.note else "") + "]"
+                  + _version_note(spec, outcome)
                   + (f" {OPERATOR_ASSERTION}" if asserted else ""),
         ))
 

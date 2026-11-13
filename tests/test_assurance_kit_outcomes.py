@@ -505,3 +505,43 @@ class TestRecordedIsNotEnrolled:
         assert collect_main(commands[0][4:]) == 0
         assert machinery_main(commands[1][4:]) == 0
         assert machinery_main(amend) == 0
+
+
+# =====================================================================
+# A version the plan declared is not a version read from the file.
+# =====================================================================
+class TestVersionProvenanceIsInTheNotes:
+    def _collect(self, tmp_path, version):
+        from assurance.collect.collector import collect
+        from assurance.collect.plan import CollectionPlan
+        from assurance.core.evidence import Actor
+
+        plan = plan_dict()
+        plan["items"][3]["version"] = version          # ITM-FW: random bytes
+        root = write_export(tmp_path / "e", stamp="s", operator="o", seq="1")
+        return collect(CollectionPlan.from_dict(plan), root, serial="0412",
+                       taken_by=Actor(identifier="Jane Doe", role="x", kind="person"))
+
+    def test_a_literal_version_says_it_was_declared_not_read(self, tmp_path):
+        manifest = self._collect(tmp_path, {"kind": "literal", "value": "9.9.9"}).manifest
+        fw = manifest.item("ITM-FW")
+        assert fw.version == "9.9.9"
+        assert "version declared in plan, not read from file" in fw.notes
+        # a version actually read from a file does not say that
+        assert "declared in plan" not in manifest.item("ITM-PARAMS").notes
+        assert "read from key 'firmware.version' of robot-params.json" in \
+            manifest.item("ITM-PARAMS").notes
+
+    def test_a_regex_version_names_the_pattern_and_the_file(self, tmp_path):
+        manifest = self._collect(
+            tmp_path, {"kind": "regex", "value": r"(firmware) "}).manifest
+        notes = manifest.item("ITM-FW").notes
+        assert "version extracted by pattern" in notes and "from controller-fw.bin" in notes
+
+    def test_notes_are_outside_the_configuration_hash(self, tmp_path):
+        """The provenance note must not make two otherwise identical collections differ."""
+        from dataclasses import replace
+
+        literal = self._collect(tmp_path, {"kind": "literal", "value": "9.9.9"}).manifest
+        stripped = replace(literal, items=tuple(replace(i, notes="") for i in literal.items))
+        assert literal.configuration_hash() == stripped.configuration_hash()
