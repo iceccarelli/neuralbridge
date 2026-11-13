@@ -27,9 +27,11 @@ from neuralbridge.config import get_settings
 
 logger = structlog.get_logger(__name__)
 
-#: Art. 71(2): Article 14 reporting applies from 11 September 2026; the main CRA
-#: obligations apply from 11 December 2027.
-CRA_DEADLINE = datetime(2026, 9, 11)
+#: Art. 71(2): Article 14 reporting APPLIES FROM 11 September 2026 (the main CRA obligations
+#: from 11 December 2027). This is an application date, not a filing deadline: the Article 14
+#: deadlines run from awareness (24 h, 72 h), from a measure being available (14 days) or from
+#: the incident notification (one month), and are computed in ``assurance.security.art14``.
+ART14_APPLIES_FROM = datetime(2026, 9, 11, tzinfo=UTC)
 
 
 class VulnerabilityStatus(StrEnum):
@@ -242,12 +244,15 @@ class CRAReportGenerator:
         """Report the Art. 14 application date and local configuration (not a compliance check).
 
         Returns:
-            A dictionary containing the readiness status and details.
+            A dictionary: ``art14_applies_from`` (timezone-aware ISO date-time of Art. 71(2),
+            an application date and NOT a filing deadline), ``days_since_applicable`` (whole
+            days since then; negative before it), and the local configuration flags.
         """
-        days_to_deadline = (CRA_DEADLINE - datetime.now(UTC).replace(tzinfo=None)).days
+        # Whole days since Art. 14 became applicable; negative while it is still in the future.
+        days_since_applicable = (datetime.now(UTC) - ART14_APPLIES_FROM).days
         readiness = {
-            "cra_deadline": CRA_DEADLINE.isoformat(),
-            "days_to_deadline": days_to_deadline,
+            "art14_applies_from": ART14_APPLIES_FROM.isoformat(),
+            "days_since_applicable": days_since_applicable,
             "reporting_enabled": self.settings.cra_reporting_enabled,
             "contact_info_set": bool(
                 self.settings.cra_organization_name
