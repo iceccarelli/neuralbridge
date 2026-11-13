@@ -11,17 +11,22 @@ whose rule is "a reason never contains a cell value" (inventory import) can use 
 
 from __future__ import annotations
 
+import unicodedata
+
 __all__ = ["PLACEHOLDER_WORDS", "KIT_STARTER_VALUES", "placeholder_problem", "starter_values"]
 
-#: Compared case-insensitively after trimming and collapsing runs of spaces.
+#: Compared after normalisation (see :func:`_key`): case, spaces, invisible characters and
+#: punctuation do not matter, so ``N/A``, ``n.a.`` and ``n a`` are one entry.
 PLACEHOLDER_WORDS = frozenset({
     # what the kit's starter files ship with
     "change me", "changeme", "your company gmbh", "your company",
     "your.name@yourcompany.example", "yourcompany",
     # what people type when they do not know yet
-    "tbd", "to be determined", "todo", "to do", "xxx", "n/a", "na", "none", "null", "nil",
-    "unknown", "unspecified", "not supplied", "not available", "placeholder", "example",
-    "sample", "test", "dummy", "serial", "serial number", "-", "--", "?", "??",
+    "tbd", "tbc", "tba", "to be determined", "to be confirmed", "to be advised", "todo",
+    "to do", "xxx", "n/a", "na", "not applicable", "none", "null", "nil", "unknown",
+    "unknown serial", "no serial", "no serial number", "not known", "not given",
+    "not provided", "unspecified", "not supplied", "not available", "placeholder",
+    "example", "sample", "test", "dummy", "serial", "serial number",
 })
 
 #: The values ``kit init`` writes for fields that are legitimate values in their own right
@@ -33,26 +38,41 @@ KIT_STARTER_VALUES = {
 }
 
 
+def _key(text: str) -> str:
+    """*text* reduced to what a person typed: no invisible, space or punctuation characters,
+    folded to lower case. ``n.a.``, ``N/A`` and ``n a`` all become ``na``."""
+    return "".join(
+        ch for ch in text.casefold()
+        if unicodedata.category(ch) not in ("Cf", "Zs", "Zl", "Zp", "Pd", "Po", "Pc", "Cc"))
+
+
+_WORDS = frozenset(_key(w) for w in PLACEHOLDER_WORDS)
+
+#: A run of one repeated character is a placeholder only when it is this long: "1111" and
+#: "AAAA" are serials somebody was given; "000000" and "xxxxxx" are not.
+_MIN_REPEAT = 6
+
+
 def placeholder_problem(field: str, value: object) -> str | None:
     """Why *value* is not real data for *field*, or ``None``. Empty is not judged here.
 
-    The reason never contains the value.
+    The reason never contains the value. A value made only of invisible or punctuation
+    characters (``—``, ``???``, a zero-width space) is a placeholder: nothing was typed.
     """
-    if not isinstance(value, str):
+    if not isinstance(value, str) or not value:
         return None
-    text = " ".join(value.split())
-    if not text:
-        return None
-    if text.casefold() in PLACEHOLDER_WORDS:
+    core = _key(value)
+    if not core:
+        return f"{field} has no letters or digits in it"
+    if core in _WORDS:
         return f"{field} is a placeholder word, not data"
-    stripped = text.replace(" ", "")
-    if len(stripped) >= 3 and set(stripped) == {"0"}:
+    if len(core) >= _MIN_REPEAT and set(core) == {"0"}:
         # Also the null digest: 64 zeros is what an uncomputed hash is written as.
         return f"{field} is all zeros"
     # Not applied to 64-hex digests: a run of one repeated hex digit is how this repository's own
     # fixtures write a stand-in hash ("1" * 64), and a manifest reader cannot tell it from a
     # computed one. An all-zero digest, which is the null hash, is refused above.
-    if 4 <= len(stripped) < 64 and len(set(stripped.casefold())) == 1:
+    if _MIN_REPEAT <= len(core) < 64 and len(set(core)) == 1:
         return f"{field} is one character repeated"
     return None
 

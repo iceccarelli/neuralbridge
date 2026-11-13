@@ -28,9 +28,12 @@ from assurance.machinery.manifest import (
 
 PLACEHOLDER_SERIALS = [
     "TBD", "tbd", "TODO", "CHANGE ME", "changeme", "xxx", "XXXXXX", "n/a", "N/A", "none",
-    "null", "placeholder", "example", "000000", "000", "AAAAAA", "-----",
+    "null", "placeholder", "example", "000000", "AAAAAA", "xxxxxx", "-----",
+    "TBC", "tba", "unknown", "unknown serial", "not applicable", "n.a.", "N A", "—", "???",
+    "---", "\u200b", "\u00a0", "T-B-D",
 ]
-REAL_SERIALS = ["0412", "AR7-1001", "2023/00123", "7", "SN 88 21", "1234567", "111"]
+REAL_SERIALS = ["0412", "AR7-1001", "2023/00123", "7", "SN 88 21", "1234567", "111",
+                "1111", "0000", "7777", "AAAA", "000123", "1111-A", "NA-100", "00-12"]
 
 
 def _sbom_problems(serial: str) -> list[str]:
@@ -127,3 +130,10 @@ def test_a_real_digest_labelled_read_from_machine_is_still_a_look():
     m = _manifest("ab" * 32)
     assert not_a_look(m) == ""
     assert m.tier_ceiling.value == "validated"
+
+
+def test_a_real_sha256_still_passes_and_the_null_digest_does_not():
+    assert placeholder_problem("sha256", "ab" * 32) is None
+    assert placeholder_problem("sha256", "1" * 64) is None        # fixtures' stand-in, tolerated
+    assert placeholder_problem("sha256", "0" * 64)
+    assert placeholder_problem("item 1 sha256", "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855") is None
