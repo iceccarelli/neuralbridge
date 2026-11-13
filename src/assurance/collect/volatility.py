@@ -22,6 +22,7 @@ itself.
 from __future__ import annotations
 
 import difflib
+import filecmp
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -196,6 +197,7 @@ def probe(
         "here as a volatile rule. Take both exports back to back.",
     ]
 
+    identical: list[str] = []      # items whose files are byte-for-byte the same in both
     for spec in plan.items:
         files_a = sorted(p for p in a.glob(spec.source) if p.is_file())
         files_b = sorted(p for p in b.glob(spec.source) if p.is_file())
@@ -236,6 +238,8 @@ def probe(
             continue
         da = [r.digest for r in ra]
         db = [r.digest for r in rb]
+        if all(filecmp.cmp(pa, pb, shallow=False) for pa, pb in zip(files_a, files_b, strict=True)):
+            identical.append(spec.item_id)
 
         if da == db:
             items.append(ItemVolatility(
@@ -273,6 +277,15 @@ def probe(
             suggested_patterns=_suggest(differing),
             detail=detail,
         ))
+
+    # Two exports that are byte-for-byte the same (the same folder, or a copy) cannot show any
+    # noise, so no rule was tested by them. "Stable" would be a verdict about nothing.
+    if items and len(identical) == len(items) and not any(not i.stable for i in items):
+        unexercised.extend(i.item_id for i in items if i.item_id not in unexercised)
+        skipped.append(
+            "the two exports are byte-for-byte identical (the same folder, or a copy of "
+            "it), so nothing could differ and no rule was exercised. Take a second, real "
+            "export of the unchanged machine.")
 
     return VolatilityReport(
         plan_id=plan.plan_id, plan_hash=plan.content_hash(),

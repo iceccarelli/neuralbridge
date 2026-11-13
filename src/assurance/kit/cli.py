@@ -10,7 +10,7 @@ their network, and it is the first command they will ask for.
 
 Exit codes are the interface:
 
-    0  every machine enrolled, nothing tried to reach the network
+    0  every machine recorded, nothing tried to reach the network
     1  a finding — a machine incomplete, a required item missing, or a refused
        connection attempt. The run still produced evidence; read it.
     2  the kit could not run at all.
@@ -23,20 +23,24 @@ from __future__ import annotations
 
 import argparse
 import json
+import shlex
 import sys
 import textwrap
 from pathlib import Path
 from typing import Any
 
-from assurance.collect.plan import CollectionPlan
+from assurance.collect.collector import ItemOutcome
 from assurance.core.errors import AssuranceError
+from assurance.kit.airgap import no_network
 from assurance.kit.enrol import (
     KitConfig,
     KitError,
     describe_placeholders,
     find_placeholders,
+    inspect_machine,
     run_kit,
     starter_config,
+    starter_warnings,
 )
 
 __all__ = ["build_parser", "main"]
@@ -54,9 +58,10 @@ _STEPS = (
     "For each machine, make a folder under `exports/` named after its serial and drop "
     "that machine's vendor exports into it: the scanner zone file, the robot parameter "
     "export, the safety PLC project, the controller firmware. Do not rename them.",
-    "Run `python -m assurance kit check kit.json`. It reads only, names every "
-    "placeholder still in your files and every item that matches no file, and writes "
-    "nothing. Fix what it names, then run the kit.",
+    "Run `python -m assurance kit check kit.json`. It reads each file the plan names the "
+    "way the run will, names every placeholder still in your files, every item that "
+    "matches no file and every file it cannot read, and writes nothing. Fix what it "
+    "names; when it says READY it prints the command to run.",
 )
 
 
@@ -103,8 +108,8 @@ plan names was found and hashed.
 
     python -m assurance kit check kit.json
 
-`check` reads the configuration and prints what the run would touch, without
-touching it. The run itself arms a guard over this process's socket layer and
+`check` reads the configuration and every file the plan names, the way the run does, and
+prints each item and what the run would touch, without writing anything. The run itself arms a guard over this process's socket layer and
 refuses every outbound connection, recording any attempt with the line of code
 that made it — and seals that record into your own ledger. So "it does not phone
 home" is not a promise in a document; it is a hash in a file you hold.
@@ -195,6 +200,12 @@ def build_parser() -> argparse.ArgumentParser:
                         "machine it came from. The assertion is the operator's, it is "
                         "recorded in each manifest and in the report, and the software "
                         "cannot check it")
+    r.add_argument("--seal-incomplete", action="store_true",
+                   help="seal a machine even when a required item could not be read. The "
+                        "manifest then becomes the machine's current one with those items "
+                        "absent, and an advisory about them will not match this machine; by "
+                        "default an incomplete collection is not sealed (the attempt is "
+                        "recorded in the run record, with the missing items)")
     r.add_argument("--json", action="store_true")
 
     c = verbs.add_parser("check", help="what this kit would do, touching nothing")
@@ -238,14 +249,65 @@ def _cmd_init(args: argparse.Namespace) -> int:
     return 0
 
 
-def _cmd_check(args: argparse.Namespace) -> int:
-    """What a run would read, and whether the files the plan names are there.
+def _check_machine(entry: Any, config: KitConfig, placeholders: list[dict[str, str]]
+                   ) -> tuple[dict[str, Any], list[ItemOutcome], dict[str, Any]]:
+    """Read one machine exactly as ``run`` would, and say what would go wrong.
 
-    The useful question is not "is the export folder empty" — it is "does every
-    item this plan declares actually resolve to a file". An item that does not
-    is left out of the manifest entirely, and a manifest silently missing an
-    item is the failure mode this whole package exists to prevent. Better to
-    find it here, before the engineer walks away thinking they are done.
+    Returns the row, the item outcomes and each item's plan spec (for printing). Nothing is
+    sealed or written: this is :func:`~assurance.kit.enrol.inspect_machine`.
+    """
+    row: dict[str, Any] = {
+        "serial": entry.serial,
+        "plan": str(config.resolve(entry.plan)),
+        "exports": str(config.resolve(entry.exports)),
+        "ready": False,
+        "items": [],
+        "problem": "",
+    }
+    plan, result, failed = inspect_machine(entry, config)
+    problems: list[str] = []
+    specs: dict[str, Any] = {}
+    outcomes: list[ItemOutcome] = []
+    if failed is not None:
+        problems.append(failed.detail)
+    if plan is not None:
+        row["plan_id"] = plan.plan_id
+        specs = {i.item_id: i for i in plan.items}
+        in_plan = [p for p in placeholders if p["file"] == entry.plan]
+        if in_plan:
+            problems.append(" ".join(describe_placeholders(in_plan)))
+    if result is not None:
+        outcomes = list(result.outcomes)
+        for o in outcomes:
+            spec = specs[o.item_id]
+            row["items"].append({
+                "item_id": o.item_id, "source": spec.source, "found": list(o.files),
+                "required": spec.required, "status": o.status, "digest": o.digest,
+                "version": o.version, "warnings": list(o.warnings), "detail": o.detail,
+            })
+        missing = [o for o in outcomes if o.status == "missing"]
+        unreadable = [o for o in outcomes if o.status == "unreadable"]
+        if missing:
+            problems.append(f"{len(missing)} of {len(outcomes)} item(s) match no file in the "
+                            "export folder")
+        if unreadable:
+            problems.append(f"{len(unreadable)} of {len(outcomes)} item(s) could not be read "
+                            f"({', '.join(o.item_id for o in unreadable)})")
+    row["problem"] = "; ".join(filter(None, problems))
+    row["ready"] = not row["problem"]
+    row["notes"] = list(starter_warnings(entry, config))
+    return row, outcomes, specs
+
+
+def _cmd_check(args: argparse.Namespace) -> int:
+    """What a run would read, item by item, and whether it would work. Writes nothing.
+
+    The useful question is not "is the export folder empty" and not "does a glob match" — a
+    file that matches and cannot be read (not UTF-8 under a text rule, not a zip, a link out
+    of the folder) passed the old check and failed the run. So this makes the same read-only
+    :func:`~assurance.collect.collector.collect` call per machine that ``run`` makes, under
+    the same socket guard, and reports each item: its digest, its version or that it is
+    unknown, its warnings, or why it would fail. It seals nothing and creates nothing.
     """
     placeholders = find_placeholders(args.config)
     try:
@@ -268,72 +330,44 @@ def _cmd_check(args: argparse.Namespace) -> int:
             print("Fill them in, then run check again.", file=sys.stderr)
         return 2
     rows: list[dict[str, Any]] = []
-    problems = 0
-
-    for entry in config.machines:
-        plan_path = config.resolve(entry.plan)
-        exports = config.resolve(entry.exports)
-        row: dict[str, Any] = {
-            "serial": entry.serial,
-            "plan": str(plan_path),
-            "exports": str(exports),
-            "ready": False,
-            "items": [],
-            "problem": "",
-        }
-        if not plan_path.exists():
-            row["problem"] = "plan does not exist"
-        elif not exports.is_dir():
-            row["problem"] = "export folder does not exist"
-        else:
-            try:
-                plan = CollectionPlan.from_json(plan_path)
-            except AssuranceError as exc:
-                row["problem"] = f"plan is unusable: {exc}"
-            else:
-                row["plan_id"] = plan.plan_id
-                in_plan = [p for p in placeholders if p["file"] == entry.plan]
-                if in_plan:
-                    row["problem"] = " ".join(describe_placeholders(in_plan))
-                for spec in plan.items:
-                    found = sorted(
-                        f.name for f in exports.glob(spec.source) if f.is_file())
-                    row["items"].append({
-                        "item_id": spec.item_id, "source": spec.source,
-                        "found": found, "required": spec.required,
-                    })
-                missing = [i for i in row["items"] if not i["found"]]
-                if missing:
-                    row["problem"] = "; ".join(filter(None, [
-                        row["problem"],
-                        f"{len(missing)} of {len(row['items'])} item(s) match no "
-                        "file in the export folder"]))
-                row["ready"] = not row["problem"]
-        if not row["ready"]:
-            problems += 1
-        rows.append(row)
+    lines: list[list[ItemOutcome]] = []
+    specs_by_row: list[dict[str, Any]] = []
+    with no_network() as airgap:
+        for entry in config.machines:
+            row, outcomes, specs = _check_machine(entry, config, placeholders)
+            rows.append(row)
+            lines.append(outcomes)
+            specs_by_row.append(specs)
+    problems = sum(1 for row in rows if not row["ready"]) + (0 if airgap.held else 1)
+    run_command = (f"python -m assurance kit run {shlex.quote(str(args.config))} "
+                   f"--out {shlex.quote(str(Path(args.config).parent / 'out'))}")
 
     if args.json:
         print(json.dumps({"kit_id": config.kit_id, "ready": not problems,
                           "machines": rows, "problems": problems,
-                          "placeholders": placeholders}, indent=2))
+                          "placeholders": placeholders, "airgap": airgap.to_dict(),
+                          "run_command": run_command if not problems else ""}, indent=2))
         return 1 if problems else 0
 
     print(f"{config.kit_id} — {config.organisation}"
           + (f" — {config.site}" if config.site else ""))
     print(f"  prepared by {config.prepared_by}")
     print(f"\n  {len(config.machines)} machine(s):")
-    for row in rows:
+    for row, outcomes, specs in zip(rows, lines, specs_by_row, strict=True):
         print(f"  {' ' if row['ready'] else '!'} {row['serial']}"
               + (f"   [{row['plan_id']}]" if row.get("plan_id") else ""))
         print(f"      plan     {row['plan']}")
         print(f"      exports  {row['exports']}")
-        for item in row["items"]:
-            mark = "  " if item["found"] else "->"
-            detail = ", ".join(item["found"]) if item["found"] else "NO MATCH"
-            flag = "" if item["found"] or not item["required"] else "  (required)"
-            print(f"      {mark} {item['item_id']:<12} {item['source']:<24} "
-                  f"{detail}{flag}")
+        for o in outcomes:
+            if o.status == "missing":
+                spec = specs[o.item_id]
+                flag = "  (required)" if spec.required else "  (optional)"
+                print(f"      MISS {o.item_id:<12} NO MATCH for {spec.source!r}{flag}")
+            else:
+                for line in _outcome_lines(o):
+                    print(line)
+        for note in row["notes"]:
+            print(f"      ? {note}")
         if row["problem"]:
             print(f"      ! {row['problem']}")
 
@@ -344,19 +378,71 @@ def _cmd_check(args: argparse.Namespace) -> int:
     print("  socket layer, refuses every outbound connection, and seals the "
           "result into your")
     print("  own ledger, so the claim is checkable rather than promised.")
+    print(f"\n  check read every file above under the same guard and wrote nothing: "
+          f"{airgap.summary()}")
+    for attempt in airgap.attempts:
+        print(f"      ! {attempt.api} -> {attempt.target}  from {attempt.caller}")
     if problems:
-        print(f"\n  {problems} machine(s) are not ready. An item that matches no "
-              "file is left out of")
-        print("  the manifest entirely — fix the `source` entries, or drop the "
-              "missing exports in,")
-        print("  before you run.")
+        print(f"\n  NOT READY: {problems} problem(s), marked FAIL, MISS or ! above. A machine with "
+              "an item that")
+        print("  cannot be read is not sealed by `run` (the attempt is recorded, nothing "
+              "describes the machine).")
+        print("  Fix the export files, the `source` entries and the template values, then "
+              "run check again.")
+    else:
+        warned = sum(1 for outcomes in lines for o in outcomes if o.warnings)
+        print("\n  READY: every item of every machine was found and read."
+              + (f" {warned} item(s) carry warnings above; read them first." if warned else ""))
+        print("  Run it with:")
+        print(f"\n    {run_command}")
     return 1 if problems else 0
+
+
+def _outcome_lines(o: ItemOutcome, indent: str = "      ") -> list[str]:
+    """One item as the integrator reads it: result, id, where it came from, why if not."""
+    mark = {"collected": "ok  ", "missing": "MISS", "unreadable": "FAIL"}[o.status]
+    if o.ok:
+        version = f"v{o.version}" if o.version else "version unknown"
+        lines = [f"{indent}{mark} {o.item_id:<12} {o.digest[:12]}  {version:<16} "
+                 f"{', '.join(o.files)}"]
+        if o.detail:
+            lines.append(f"{indent}     {o.detail}")
+    else:
+        lines = [f"{indent}{mark} {o.item_id:<12} {o.detail}"]
+    lines.extend(f"{indent}     ! {w}" for w in o.warnings)
+    return lines
+
+
+def _enrol_commands(config: KitConfig, run: Any, read_from_machine: bool) -> list[str]:
+    """The commands that turn a recorded machine into an enrolled one.
+
+    The kit seals each machine's manifest into the ledger; it does not enrol it. Enrolment is
+    a declaration by a named person (``machinery enrol``), and ``machinery amend-enrolment``
+    refuses a machine that has none. Two steps: write the manifest file with the same plan,
+    folder and identity the kit used (so the configuration is identical), then enrol it.
+    """
+    q = shlex.quote
+    lines: list[str] = []
+    for m in run.recorded:
+        entry = next(e for e in config.machines if e.serial == m.serial)
+        manifest = f"manifest-{entry.serial}.json"
+        lines.append(
+            f"python -m assurance collect run {q(str(config.resolve(entry.plan)))} "
+            f"--root {q(str(config.resolve(entry.exports)))} --serial {q(entry.serial)} "
+            f"--actor {q(config.prepared_by)} --site {q(config.site)} "
+            f"--country {q(config.country)} --year {q(entry.year)} --out {q(manifest)}"
+            + (" --read-from-machine" if read_from_machine else ""))
+        lines.append(
+            f"python -m assurance machinery enrol {q(manifest)} "
+            f"--ledger {q(run.ledger_path)} --actor {q(config.prepared_by)}")
+    return lines
 
 
 def _cmd_run(args: argparse.Namespace) -> int:
     config = KitConfig.from_json(args.config)
     run = run_kit(config, args.out, allow_loopback=args.allow_loopback,
-                  read_from_machine=args.read_from_machine)
+                  read_from_machine=args.read_from_machine,
+                  seal_incomplete=args.seal_incomplete)
 
     if args.json:
         print(json.dumps(run.to_dict(), indent=2, sort_keys=True))
@@ -365,10 +451,28 @@ def _cmd_run(args: argparse.Namespace) -> int:
         print("  (COMPLETE means only that every item the plan names was found and hashed.)")
         print()
         for m in run.machines:
-            print(f"  {m.status:<11} {m.serial:<16} {m.items} item(s)"
+            count = (f"{m.items} of {len(m.outcomes)} item(s) collected" if m.outcomes
+                     else f"{m.items} item(s)")
+            print(f"  {m.status:<11} {m.serial:<16} {count}"
                   + (f"   {m.detail}" if m.detail else ""))
+            for o in m.outcomes:
+                for line in _outcome_lines(o):
+                    print(line)
             for w in m.warnings:
                 print(f"      ! {w}")
+        unsealed = [m.serial for m in run.machines if m.status == "incomplete" and not m.sealed]
+        if unsealed:
+            print(f"\n  NOT sealed (collection incomplete): {', '.join(unsealed)}. Nothing in "
+                  "the ledger describes those machines; the attempt, with the items that "
+                  "were not collected, is in the run record and the report. Fix the export "
+                  "folder and run again, or pass --seal-incomplete to seal what was read.")
+        if run.recorded:
+            print("\n  recorded is not enrolled: the manifest is sealed in the ledger, but no "
+                  "enrolment\n  has been declared, so `machinery amend-enrolment` will say "
+                  "'not enrolled'. To enrol\n  (a named person's declaration; the kit does "
+                  "not make it for you), per machine:")
+            for line in _enrol_commands(config, run, args.read_from_machine):
+                print(f"\n    {line}")
         print(f"\n  airgap: {run.airgap.summary()}")
         for attempt in run.airgap.attempts:
             print(f"      ! {attempt.api} -> {attempt.target}  from {attempt.caller}")

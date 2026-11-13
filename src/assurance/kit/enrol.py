@@ -35,17 +35,19 @@ The order of operations is fixed and the reason is the airgap record:
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from ..collect.collector import collect
-from ..collect.plan import CollectionPlan
-from ..core.actor_names import actor_grammar_problem, declared_role_problem
+from ..collect.collector import CollectionResult, ItemOutcome, collect
+from ..collect.plan import CollectionPlan, read_json_object
+from ..core.actor_names import actor_name_problem, declared_role_problem
 from ..core.errors import AssuranceError
 from ..core.evidence import Actor, Evidence, Origin, ValidationState
 from ..core.identity import format_utc, utc_now
+from ..core.placeholders import placeholder_problem, starter_values
 from ..evidence.ledger import EvidenceLedger
 from ..machinery.manifest import HashSource, ManifestSource
 from ..machinery.record import record_manifest
@@ -55,6 +57,8 @@ from .airgap import AIRGAP_LIMITS, AirgapResult, no_network
 __all__ = [
     "describe_placeholders",
     "find_placeholders",
+    "inspect_machine",
+    "starter_warnings",
     "AIRGAP_KIND",
     "KIT_RUN_KIND",
     "KitConfig",
@@ -74,17 +78,9 @@ class KitError(AssuranceError):
     """The kit cannot run, and the message says what to fix."""
 
 
-#: Values the starter files ship with. A run that reaches a report with one of
-#: these still in it has produced a document nobody can act on, addressed from
-#: nobody, about a machine made by nobody.
-_PLACEHOLDERS = frozenset({
-    "change me", "changeme", "your company gmbh", "your company",
-    "your.name@yourcompany.example", "yourcompany", "tbd", "todo", "xxx",
-})
-
-
 def _is_placeholder(value: str) -> bool:
-    return value.strip().lower() in _PLACEHOLDERS
+    """Whether *value* is a template value (the one definition, shared with SBOM and inventory)."""
+    return placeholder_problem("value", value) is not None
 
 
 def find_placeholders(config_path: str | Path) -> list[dict[str, str]]:
@@ -169,13 +165,23 @@ class MachineEntry:
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> MachineEntry:
+        if not isinstance(d, dict):
+            raise KitError(f"each entry of `machines` in kit.json must be an object with "
+                           f"serial, plan and exports, not {type(d).__name__}.")
+        who = f"machine {d['serial']!r}" if d.get("serial") else "a machine entry"
         missing = [k for k in ("serial", "plan", "exports") if not d.get(k)]
         if missing:
+            why = {
+                "serial": "A machine with no serial cannot be told apart from another one "
+                          "later, which is the only thing a fleet record is for.",
+                "plan": "`plan` is the path of the collection plan for this machine "
+                        "(for example plans/cell.json).",
+                "exports": "`exports` is the folder holding this machine's exported files "
+                           "(for example exports/<serial>).",
+            }
             raise KitError(
-                "a machine entry needs " + ", ".join(missing)
-                + ". A machine with no serial cannot be told apart from another "
-                "one later, which is the only thing a fleet record is for."
-            )
+                f"in kit.json, {who} is missing {', '.join(missing)}. "
+                + " ".join(why[m] for m in missing))
         return cls(
             serial=str(d["serial"]), plan=str(d["plan"]),
             exports=str(d["exports"]), year=str(d.get("year", "")),
@@ -227,19 +233,34 @@ class KitConfig:
                 "prepared_by is empty. An unattributed record is not evidence — "
                 "the first question anybody asks of a finding is who looked."
             )
-        _problem = actor_grammar_problem(self.prepared_by) or declared_role_problem(self.role)
+        _problem = actor_name_problem(self.prepared_by) or declared_role_problem(self.role)
         if _problem:
             raise KitError(f"prepared_by / role cannot be recorded: {_problem}.")
         if not self.machines:
             raise KitError("no machines listed; there is nothing to enrol.")
         seen: set[str] = set()
+        folders: dict[Path, str] = {}
         for m in self.machines:
+            why = placeholder_problem("serial", m.serial)
+            if why:
+                raise KitError(
+                    f"machine serial {m.serial!r}: {why}. The serial is what tells this "
+                    "machine from every other one in a fleet record; type the number from "
+                    "the unit's rating plate.")
             if m.serial in seen:
                 raise KitError(
                     f"serial {m.serial} appears twice. Two machines sharing a "
                     "serial produce one record that describes neither."
                 )
             seen.add(m.serial)
+            folder = self.resolve(m.exports).resolve()
+            if folder in folders:
+                raise KitError(
+                    f"machines {folders[folder]} and {m.serial} both read the export folder "
+                    f"{m.exports!r}. They would be enrolled with identical evidence, and one "
+                    "of them is not what that folder holds. Give each machine its own folder "
+                    "of its own exports (exports/<serial>).")
+            folders[folder] = m.serial
         if self.country and (len(self.country) != 2 or not self.country.isalpha()):
             raise KitError(
                 f"country {self.country!r} is not an ISO 3166-1 alpha-2 code. It "
@@ -264,15 +285,11 @@ class KitConfig:
                 "a working one and edit it."
             )
         try:
-            data = json.loads(p.read_text("utf-8"))
-        except json.JSONDecodeError as exc:
-            raise KitError(f"{p} is not valid JSON: {exc}") from exc
-        except (OSError, UnicodeDecodeError) as exc:
-            # A directory, a permissions problem or a binary file is "the kit could not
-            # run" (exit 2), not an uncaught crash that shares exit 1 with a finding.
+            data = read_json_object(p, "kit config", KitError)
+        except OSError as exc:
+            # A directory or a permissions problem is "the kit could not run" (exit 2), not an
+            # uncaught crash that shares exit 1 with a finding.
             raise KitError(f"{p} could not be read as a kit config: {exc}") from exc
-        if not isinstance(data, dict):
-            raise KitError(f"{p} must contain a JSON object, not {type(data).__name__}.")
         return cls(
             kit_id=str(data.get("kit_id", "")),
             organisation=str(data.get("organisation", "")),
@@ -288,21 +305,40 @@ class KitConfig:
 
 @dataclass(frozen=True)
 class MachineResult:
-    """What happened to one machine. ``enrolled`` is not the only good outcome."""
+    """What happened to one machine. ``recorded`` is not the only good outcome.
+
+    ``recorded`` means the machine's manifest is sealed in this kit's ledger. It does not mean
+    enrolled: that is ``assurance machinery enrol``, a named person's declaration
+    (:func:`~assurance.machinery.enrol.enrol_machine`), which the kit never makes for them.
+    """
 
     serial: str
-    status: str            # enrolled | incomplete | failed
+    status: str            # recorded | incomplete | failed
     items: int = 0
     configuration_hash: str = ""
     plan_id: str = ""
     warnings: tuple[str, ...] = ()
     detail: str = ""
+    #: One entry per item the plan names: collected, missing or unreadable, with the reason,
+    #: the files it came from, its digest and the version found. Empty when the machine
+    #: failed before any file was read.
+    outcomes: tuple[ItemOutcome, ...] = ()
+    #: Whether a manifest for this machine is in the ledger. An incomplete collection is
+    #: not sealed unless the operator asked for it (``--seal-incomplete``).
+    sealed: bool = False
+
+    @property
+    def missing(self) -> tuple[str, ...]:
+        """The item ids the plan names that were not collected (missing or unreadable)."""
+        return tuple(o.item_id for o in self.outcomes if not o.ok)
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "serial": self.serial, "status": self.status, "items": self.items,
             "configuration_hash": self.configuration_hash, "plan_id": self.plan_id,
             "warnings": list(self.warnings), "detail": self.detail,
+            "sealed": self.sealed, "missing": list(self.missing),
+            "outcomes": [o.to_dict() for o in self.outcomes],
         }
 
 
@@ -326,8 +362,13 @@ class KitRun:
     read_from_machine_asserted: bool = False
 
     @property
+    def recorded(self) -> tuple[MachineResult, ...]:
+        return tuple(m for m in self.machines if m.status == "recorded")
+
+    @property
     def enrolled(self) -> tuple[MachineResult, ...]:
-        return tuple(m for m in self.machines if m.status == "enrolled")
+        """Alias of :attr:`recorded`, kept for callers written before the rename."""
+        return self.recorded
 
     @property
     def verdict(self) -> str:
@@ -338,12 +379,12 @@ class KitRun:
         every run that will ever happen, so letting it force PARTIAL every time
         would teach the reader that the verdict means nothing, which is how a
         signal is destroyed. It belongs in what-was-not-checked, and that is
-        where it goes. What moves the verdict is a machine that did not enrol,
+        where it goes. What moves the verdict is a machine that was not recorded,
         a required item that was not found, or a connection attempt.
         """
-        if not self.enrolled:
+        if not self.recorded:
             return "failed"
-        if len(self.enrolled) != len(self.machines):
+        if len(self.recorded) != len(self.machines):
             return "partial"
         if not self.airgap.held:
             return "partial"
@@ -351,8 +392,8 @@ class KitRun:
 
     def summary(self) -> str:
         return (
-            f"{self.kit_id} — {len(self.enrolled)}/{len(self.machines)} machine(s) "
-            f"enrolled — {self.verdict.upper()}"
+            f"{self.kit_id} — {len(self.recorded)}/{len(self.machines)} machine(s) "
+            f"recorded — {self.verdict.upper()}"
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -419,7 +460,9 @@ def kit_limits(read_from_machine: bool) -> tuple[str, ...]:
 
 
 def starter_config(kit_id: str = "site-kit") -> dict[str, Any]:
-    """A configuration that runs as written, so the first attempt succeeds."""
+    """A configuration to edit, not to run: ``organisation`` and ``prepared_by`` are placeholders the
+    kit refuses, and ``site``, ``country``, ``year`` and the serial are values it names as the
+    starter's until they are chosen."""
     return {
         "kit_id": kit_id,
         "organisation": "YOUR COMPANY GmbH",
@@ -439,43 +482,51 @@ def starter_config(kit_id: str = "site-kit") -> dict[str, Any]:
     }
 
 
-def _enrol_one(
-    entry: MachineEntry,
-    config: KitConfig,
-    ledger: EvidenceLedger,
-    taken_at: datetime | None,
-    read_from_machine: bool = False,
-) -> MachineResult:
+def starter_warnings(entry: MachineEntry, config: KitConfig) -> tuple[str, ...]:
+    """Fields of this machine still holding the value ``kit init`` wrote.
+
+    Not refusals: "Plant 1", ``DE`` and 2025 can all be true. But a value nobody chose is
+    sealed into the manifest and the report as if somebody had (the country is carried into
+    Article 14 filings), so it is named, in ``check``, in the run output and in ``run.json``.
+    """
+    held = starter_values(site=config.site, country=config.country, year=entry.year,
+                          serial=entry.serial)
+    if not held:
+        return ()
+    names = ", ".join(f"{k}={v!r}" for k, v in held.items())
+    return (f"{names} -- still the value `kit init` wrote. It is sealed as this machine's "
+            "own and printed in the report. If it is correct, ignore this; if you did not "
+            "choose it, edit kit.json.",)
+
+
+def _prepare(
+    entry: MachineEntry, config: KitConfig,
+) -> tuple[CollectionPlan | None, Path, MachineResult | None]:
+    """The plan and the export folder for one machine, or why it cannot be collected."""
     plan_path = config.resolve(entry.plan)
     exports = config.resolve(entry.exports)
 
     if not plan_path.exists():
-        return MachineResult(
+        return None, exports, MachineResult(
             serial=entry.serial, status="failed",
             detail=f"plan {plan_path} does not exist")
     if not exports.is_dir():
-        return MachineResult(
+        return None, exports, MachineResult(
             serial=entry.serial, status="failed",
             detail=f"export folder {exports} does not exist")
-
     try:
         plan = CollectionPlan.from_json(plan_path)
     except AssuranceError as exc:
-        return MachineResult(
+        return None, exports, MachineResult(
             serial=entry.serial, status="failed",
             detail=f"plan {plan_path.name} is unusable: {exc}")
+    return plan, exports, None
 
-    for label, value in (("manufacturer", plan.manufacturer), ("model", plan.model)):
-        if _is_placeholder(value):
-            return MachineResult(
-                serial=entry.serial, status="failed", plan_id=plan.plan_id,
-                detail=(
-                    f"plan {plan_path.name} still says {label}={value!r}. The "
-                    "manufacturer and model are the machine's identity; a "
-                    "manifest carrying a template value describes nothing and "
-                    "cannot be matched to a supplier advisory later."
-                ))
 
+def _collect(
+    entry: MachineEntry, config: KitConfig, plan: CollectionPlan, exports: Path,
+    taken_at: datetime | None, read_from_machine: bool,
+) -> tuple[CollectionResult | None, MachineResult | None]:
     try:
         result = collect(
             plan, exports,
@@ -491,28 +542,136 @@ def _enrol_one(
             else HashSource.SUPPLIED_BY_VENDOR,
         )
     except AssuranceError as exc:
-        return MachineResult(
-            serial=entry.serial, status="failed",
-            plan_id=plan.plan_id, detail=str(exc))
+        return None, MachineResult(
+            serial=entry.serial, status="failed", plan_id=plan.plan_id, detail=str(exc))
+    return result, None
 
-    record_manifest(ledger, result.manifest, actor=config.actor)
+
+def inspect_machine(
+    entry: MachineEntry, config: KitConfig,
+) -> tuple[CollectionPlan | None, CollectionResult | None, MachineResult | None]:
+    """What ``run`` would read for one machine, read-only: no ledger, no sealing, no output.
+
+    The same preparation and the same :func:`~assurance.collect.collector.collect` call
+    ``run`` makes, so ``check`` cannot say "ready" about a file ``run`` then cannot read.
+    The third element is the failure, when the machine cannot even be collected.
+    """
+    plan, exports, failed = _prepare(entry, config)
+    if plan is None:
+        return None, None, failed
+    result, failed = _collect(entry, config, plan, exports, None, False)
+    return plan, result, failed
+
+
+def _enrol_one(
+    entry: MachineEntry,
+    config: KitConfig,
+    ledger: EvidenceLedger,
+    taken_at: datetime | None,
+    read_from_machine: bool = False,
+    seal_incomplete: bool = False,
+) -> MachineResult:
+    plan, exports, failed = _prepare(entry, config)
+    if plan is None:
+        assert failed is not None
+        return failed
+    plan_path = config.resolve(entry.plan)
+
+    for label, value in (("manufacturer", plan.manufacturer), ("model", plan.model)):
+        if _is_placeholder(value):
+            return MachineResult(
+                serial=entry.serial, status="failed", plan_id=plan.plan_id,
+                detail=(
+                    f"plan {plan_path.name} still says {label}={value!r}. The "
+                    "manufacturer and model are the machine's identity; a "
+                    "manifest carrying a template value describes nothing and "
+                    "cannot be matched to a supplier advisory later."
+                ))
+
+    result, failed = _collect(entry, config, plan, exports, taken_at, read_from_machine)
+    if result is None:
+        assert failed is not None
+        return failed
+
     template_suppliers = sorted(
         {i.item_id for i in plan.items if _is_placeholder(i.supplier)})
-    warnings = tuple(result.warnings) + ((
+    warnings = starter_warnings(entry, config) + tuple(result.warnings) + ((
         f"the supplier of {', '.join(template_suppliers)} is still a template value in "
         f"{plan_path.name}; an advisory matches on the supplier, so it will not match "
         "these items until it is filled in.",) if template_suppliers else ())
+    common: dict[str, Any] = {
+        "serial": entry.serial, "items": len(result.manifest.items),
+        "plan_id": plan.plan_id, "warnings": warnings, "outcomes": result.outcomes,
+    }
+    # The configuration hash names a manifest that is in the ledger; a machine whose
+    # manifest was not sealed has none to name.
+    sealed_hash = result.manifest.configuration_hash()
+
+    if result.complete:
+        record_manifest(ledger, result.manifest, actor=config.actor)
+        return MachineResult(
+            status="recorded", sealed=True, configuration_hash=sealed_hash,
+            detail=result.summary().splitlines()[0] if result.summary() else "", **common)
+
+    # An incomplete collection is a first-class outcome, but it is not THE configuration of
+    # the machine: a sealed manifest becomes the baseline every later comparison starts from
+    # with the missing items absent from it (COLLECT.md). So it is sealed only when the
+    # operator asked for exactly that; otherwise the attempt is recorded in the run record
+    # (with the missing item ids and why) and nothing describes this machine in the ledger.
+    missing = ", ".join(
+        f"{o.item_id} ({o.status})" for o in result.outcomes if not o.ok)
+    if seal_incomplete:
+        record_manifest(ledger, result.manifest, actor=config.actor)
+        return MachineResult(
+            status="incomplete", sealed=True, configuration_hash=sealed_hash,
+            detail=f"SEALED INCOMPLETE at your request (--seal-incomplete); not collected: "
+                   f"{missing}", **common)
     return MachineResult(
-        serial=entry.serial,
-        # "incomplete" is a first-class outcome: a manifest missing a required
-        # item is still evidence, and pretending otherwise loses the finding.
-        status="enrolled" if result.complete else "incomplete",
-        items=len(result.manifest.items),
-        configuration_hash=result.manifest.configuration_hash(),
-        plan_id=plan.plan_id,
-        warnings=warnings,
-        detail=result.summary().splitlines()[0] if result.summary() else "",
-    )
+        status="incomplete", sealed=False,
+        detail=f"NOT SEALED: the collection is incomplete; not collected: {missing}. Fix the "
+               "export folder or the plan and run again", **common)
+
+
+def _outcome_phrase(o: ItemOutcome) -> str:
+    """One item, as the report and the terminal both say it: what it was, where from."""
+    if o.ok:
+        files = ", ".join(o.files) if o.files else "no file"
+        return (f"{o.item_id} read from {files} (digest {o.digest[:12]}, "
+                + (f"version {o.version}" if o.version else "version unknown") + ")")
+    return f"{o.item_id} {o.status.upper()}: {o.detail}"
+
+
+def machine_limits(results: Iterable[MachineResult]) -> tuple[str, ...]:
+    """What the report must say about each machine that the fleet record cannot.
+
+    The fleet record only knows what was sealed. A machine whose collection was
+    incomplete, or that failed before any file was read, is invisible in it, and a report
+    that is silent about that reads as a clean run. One entry per such machine, plus the
+    per-item reading (what was read, from which file) for every machine the kit looked at.
+    """
+    out: list[str] = []
+    for m in results:
+        if m.status == "failed":
+            out.append(f"Machine {m.serial} was NOT recorded: {m.detail.rstrip('.')}.")
+            continue
+        read = "; ".join(_outcome_phrase(o) for o in m.outcomes)
+        if m.status == "incomplete" and m.sealed:
+            out.append(
+                f"Machine {m.serial} was sealed INCOMPLETE at the operator's request "
+                f"(--seal-incomplete). Not collected: {', '.join(m.missing)}. Its manifest "
+                "carries the incomplete-collection marker; nothing derived from it says "
+                f"anything about those items. What was and was not read: {read}.")
+        elif m.status == "incomplete":
+            out.append(
+                f"Machine {m.serial} was NOT sealed: its collection was incomplete "
+                f"(not collected: {', '.join(m.missing)}), so no manifest of this machine is "
+                "in this ledger and nothing here describes its configuration. What was and "
+                f"was not read: {read}.")
+        else:
+            out.append(f"Machine {m.serial} was sealed. What was read: {read}.")
+        for o in m.outcomes:
+            out.extend(f"Machine {m.serial}, {o.item_id}: {w}" for w in o.warnings)
+    return tuple(out)
 
 
 def run_kit(
@@ -522,6 +681,7 @@ def run_kit(
     allow_loopback: bool = False,
     now: datetime | None = None,
     read_from_machine: bool = False,
+    seal_incomplete: bool = False,
 ) -> KitRun:
     """Enrol every machine in *config*, offline, into a ledger under *out_dir*.
 
@@ -531,6 +691,11 @@ def run_kit(
 
     ``read_from_machine`` is the operator's assertion that the kit ran on the
     machines; without it every item is ``supplied_by_vendor``.
+
+    ``seal_incomplete`` has the meaning it has for ``collect run``: a machine whose
+    collection is incomplete is NOT sealed unless it is set, because a sealed manifest
+    becomes the machine's current one with the missing items absent from every later
+    comparison.
     """
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -542,11 +707,21 @@ def run_kit(
     run_path = out / "run.json"
 
     ledger = EvidenceLedger(ledger_path)
+    # An existing ledger is appended to, so its chain is walked first: appending to a broken
+    # chain would seal fresh records and an attestation request over a ledger that no longer
+    # verifies. Refused with nothing written (the same rule as machinery enrolment).
+    chain_ok, chain_problems = ledger.verify_chain()
+    if not chain_ok:
+        raise KitError(
+            f"{ledger_path} does not verify as a hash chain, so nothing was recorded: "
+            + "; ".join(chain_problems[:3])
+            + ". Do not append to it. Keep it as evidence, and run into a new --out folder.")
     results: list[MachineResult] = []
 
     with no_network(allow_loopback=allow_loopback) as airgap:
         for entry in config.machines:
-            results.append(_enrol_one(entry, config, ledger, now, read_from_machine))
+            results.append(_enrol_one(
+                entry, config, ledger, now, read_from_machine, seal_incomplete))
 
     # Outside the guard, deliberately: a record of a guard cannot be written
     # while the guard it describes is still running.
@@ -618,7 +793,7 @@ def run_kit(
             organisation=config.organisation,
             prepared_by=config.prepared_by,
             generated_at=now,
-            extra_limits=AIRGAP_LIMITS + limits,
+            extra_limits=machine_limits(results) + AIRGAP_LIMITS + limits,
         )),
         encoding="utf-8")
 

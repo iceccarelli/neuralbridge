@@ -34,6 +34,7 @@ from typing import Any
 from assurance.core.errors import AssuranceError
 from assurance.core.evidence import Actor
 from assurance.core.identity import content_hash_of, format_utc, parse_utc
+from assurance.core.placeholders import placeholder_problem
 from assurance.core.tiers import AssuranceTier
 
 __all__ = [
@@ -79,7 +80,11 @@ def normalised_digest(text: str) -> str:
     h = text.strip().lower()
     if h.startswith("sha256:"):
         h = h[len("sha256:"):].strip()
-    return h if len(h) == 64 and set(h) <= _HEX64 else ""
+    if len(h) != 64 or not set(h) <= _HEX64:
+        return ""
+    # 64 zeros is the null hash, how an uncomputed digest is written. It is not the digest of
+    # any file, so it must never make an item "comparable" or "read from the machine".
+    return "" if placeholder_problem("sha256", h) else h
 
 
 class ManifestError(AssuranceError):
@@ -673,8 +678,10 @@ def not_a_look(manifest: SafetyManifest) -> str:
     reasons: list[str] = []
     if manifest.source is not ManifestSource.AS_FOUND:
         reasons.append(f"its source is {manifest.source.value!r}, not 'as_found'")
+    # The effective label, not the typed one: "read_from_machine" beside "n/a" or 64 zeros was
+    # not read from anything (tier ceiling "profile"), and must not pass for a look.
     not_read = sorted(i.item_id for i in manifest.items
-                      if not i.hash_source.describes_this_unit)
+                      if not i.effective_hash_source.describes_this_unit)
     if not_read:
         reasons.append(
             "item(s) " + ", ".join(not_read) + " carry no hash read off the machine "
