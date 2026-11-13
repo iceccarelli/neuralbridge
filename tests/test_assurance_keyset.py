@@ -247,6 +247,31 @@ class TestAnchorAllAfterARotation:
         assert again.count("fresh") == 1 and len(log.read()) == 2     # no record per run
 
 
+class TestAnchorAllRefusesALogItCannotVerify:
+    def test_a_keyset_missing_an_earlier_era_refuses_and_appends_nothing(self, rot, tmp_path):
+        data = tmp_path / "data"
+        (data / "tenants").mkdir(parents=True)
+        (data / "attestations").mkdir()
+        led = EvidenceLedger(data / "tenants" / "acc_0123456789abcdef.db")
+        for i in range(3):
+            led.append(_ev(i), subject="X")
+        k0 = SigningKey.generate()
+        log = AttestationLog(data / "attestations" / "acc_0123456789abcdef.jsonl")
+        attest(led, k0, log, now=rot.t0 - timedelta(days=3))
+        before = log.path.read_bytes()
+        only_k2 = Keyset.from_keys([rot.k2.verifying])
+        for _ in range(4):
+            report = anchor_all(data, rot.k2, keyset=only_k2, rotating=True,
+                                now=parse_utc(rot.second.attested_at))
+            assert report.exit_code == 1 and report.count("refused") == 1
+            assert "does not verify under the keyset" in report.outcomes[0].detail
+            assert report.count("anchored") == 0
+        assert log.path.read_bytes() == before            # not one record was appended
+        dry = anchor_all(data, rot.k2, keyset=only_k2, rotating=True, dry_run=True,
+                         now=parse_utc(rot.second.attested_at))
+        assert dry.exit_code == 1
+
+
 class TestKeysetCli:
     def test_add_then_check_round_trips_and_refuses_a_wrong_fingerprint(self, rot, capsys):
         ks = rot.root / "built.json"

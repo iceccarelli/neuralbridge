@@ -51,6 +51,7 @@ from assurance.attest.attestation import (
     AttestationLog,
     attest,
 )
+from assurance.attest.custody import verify_log_across_rotation
 from assurance.attest.keys import SigningKey
 from assurance.attest.keyset import Keyset
 from assurance.core.errors import AssuranceError
@@ -283,6 +284,22 @@ def _one(account: str, path: Path, logs: Path, key: SigningKey, *, max_age: time
     entries = ledger.entries()
     length, head_seq = len(entries), (entries[-1].seq if entries else 0)
     log = AttestationLog(log_path, label=f"the attestation log for {account}")
+    if keyset is not None:
+        # A log that does not verify under the key history is not continued: signing onto it would
+        # leave a log nobody can verify, and the next run would find it stale and sign again.
+        try:
+            records, torn = log.scan()
+        except AttestationError as exc:
+            return LedgerOutcome(name, "refused", f"{str(exc).splitlines()[0][:300]} Nothing was "
+                                 "signed.", account_id=account)
+        if records and not torn:
+            verdict = verify_log_across_rotation(records, keyset)
+            if not verdict.ok:
+                return LedgerOutcome(
+                    name, "refused",
+                    f"the existing log does not verify under the keyset ({verdict.problems[0]}); "
+                    "add the missing earlier key to the keyset (KEY-CEREMONY.md section 6a) or "
+                    "archive the log. Nothing was signed.", account_id=account)
     try:
         state, reason, _anchor = anchor_status(ledger, log, key, max_age=max_age, now=now,
                                               keyset=keyset)
