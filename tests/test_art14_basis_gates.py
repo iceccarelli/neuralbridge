@@ -214,3 +214,17 @@ class TestFieldFiveNeedsAnEuMemberState:
                           {**EW, "member_states_available": ["NO"]}, PERSON, now=NOW)
         d = reg.case("c1").deadlines.early_warning
         assert d.status == "recorded_incomplete" and d.met is None
+
+
+@pytest.mark.parametrize("look_alike", ["ıt", "ſe", "dé", "ＤＥ", "dе", "ǆ"])
+def test_field_five_codes_must_be_ascii_letters_before_they_are_folded(look_alike):
+    """str.upper() maps 'ı' to 'I' and 'ſ' to 'S', so ['ıt'] used to pass as Italy."""
+    v, issues = _field5([look_alike])
+    assert not v.submittable
+    assert any(i.severity == "blocking" and "not ISO 3166-1 alpha-2" in i.message for i in issues)
+    v2, _ = _field5(["DE", look_alike])
+    assert not v2.submittable
+
+
+def test_ascii_lower_case_codes_still_fold_as_before():
+    assert _field5(["de", "Fr"])[0].submittable
