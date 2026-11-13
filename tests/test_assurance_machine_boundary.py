@@ -545,3 +545,160 @@ class TestTheBoundaryOnEverySurface:
         d = client.post("/v1/machine/verify", json=payload, headers=keyed(store, "cell")).json()
         assert d["result"]["boundary"]["human_review"]["required"] is True
         assert all("boundary" in c for c in d["result"]["checks"])
+
+
+# -- reference fixtures: expected outcomes are stated IN the files -------------------------------
+# tests/fixtures/machine_boundary/reference/<case>.json holds an envelope, one or more traces and
+# the outcome this engine gives each. Where the outcome is correct it is a plain assertion; where
+# it is a point a qualified person must decide, the test is named `..._is_a_known_review_point`
+# and its docstring says what the person decides. Changing one is a conscious act: a different
+# outcome here is a change of verdict semantics, which needs a new engine version.
+REFERENCE = sorted(p.stem for p in (FIXTURES / "reference").glob("*.json"))
+NOW = datetime(2026, 10, 1, tzinfo=UTC)
+
+
+def _case(name):
+    return json.loads((FIXTURES / "reference" / f"{name}.json").read_text())
+
+
+def _run(doc, trace_key, envelope_key="envelope"):
+    env = SafetyEnvelope.from_dict(doc[envelope_key])
+    return verify(env, Trace.from_dict(doc["traces"][trace_key]), now=NOW)
+
+
+def _ssm(result):
+    return result.check("ssm_separation")
+
+
+class TestReferenceFixturesGiveTheOutcomesTheyState:
+    def test_the_fixtures_are_all_here(self):
+        assert REFERENCE == ["dropped_sample", "exact_at_limit_decimal", "exact_at_limit_float",
+                             "extrapolated_stop_time", "metres_typed_as_millimetres",
+                             "mode_label", "positions_disagree_with_reported_speed",
+                             "sensed_zero_closing_speed"]
+
+    @pytest.mark.parametrize("name", REFERENCE)
+    def test_every_stated_outcome_is_what_the_engine_gives(self, name):
+        doc = _case(name)
+        assert doc["description"].strip()
+        for key, want in doc["expected"].items():
+            env_key = "envelope_metres" if key == "metres_envelope" else "envelope"
+            r = _run(doc, key, env_key)
+            got = {"verdict": r.verdict.value, "tier": r.tier.value,
+                   "checks": {c.name: c.outcome.value for c in r.checks}}
+            assert got == want, (name, key)
+
+    @pytest.mark.parametrize("name", [n for n in REFERENCE if "KNOWN REVIEW POINT" in
+                                      json.loads((FIXTURES / "reference" / f"{n}.json")
+                                                 .read_text())["description"]])
+    def test_a_fixture_that_is_a_review_point_says_so_in_its_description(self, name):
+        assert "KNOWN REVIEW POINT" in _case(name)["description"]
+
+
+class TestAtTheLimit:
+    def test_exactly_at_the_limit_passes_with_zero_margin(self):
+        r = _run(_case("exact_at_limit_float"), "at_limit")
+        assert _ssm(r).outcome.value == "verified" and _ssm(r).worst_margin == 0.0
+
+    def test_one_ulp_below_fails_and_one_ulp_above_passes(self):
+        doc = _case("exact_at_limit_float")
+        assert _ssm(_run(doc, "one_ulp_below")).outcome.value == "violated"
+        assert _ssm(_run(doc, "one_ulp_above")).outcome.value == "verified"
+
+    def test_a_decimal_exactly_at_the_limit_fails_by_float_noise_is_a_known_review_point(self):
+        """A human must decide the tolerance at the limit.
+
+        In exact decimal arithmetic the required distance is 1399.8 mm and the trace reports
+        1399.8, i.e. exactly at it. The engine adds floats and requires 1399.8000000000002, so a
+        distance that equals the requirement FAILS by about 2e-13 mm. Whether a figure at the limit
+        passes, and with what tolerance, is a judgement about measurement resolution that the
+        engine does not make. A change to this outcome is a change of verdict semantics.
+        """
+        doc = _case("exact_at_limit_decimal")
+        v = _ssm(_run(doc, "decimal_exactly_at_limit")).violations[0]
+        assert doc["notes"]["decimal_exact_required_mm"] == "1399.8"
+        assert v.measured == 1399.8 and v.bound > 1399.8
+        assert 0 < v.exceedance < 1e-9
+
+
+class TestKnownReviewPoints:
+    def test_a_sensed_zero_closing_speed_flips_the_verdict_and_is_disclosed(self):
+        """A human must decide whether the sensed closing speed is trustworthy.
+
+        The same 1200 mm separation FAILS on the default 1600 mm/s and PASSES when the trace
+        reports 0.0. Engine 7 states the substitution; it does not (and must not) decide that
+        a reported zero is wrong.
+        """
+        doc = _case("sensed_zero_closing_speed")
+        assert _ssm(_run(doc, "no_sensed_speed")).outcome.value == "violated"
+        sensed = _run(doc, "sensed_zero")
+        assert _ssm(sensed).outcome.value == "verified"
+        assert _sensed_notes(sensed)
+
+    def test_distances_typed_in_metres_pass_with_no_caveat_is_a_known_review_point(self):
+        """A human must confirm the units of every figure in the envelope.
+
+        The stop, intrusion and uncertainty figures typed in metres make a 1500 mm separation
+        PASS where in millimetres it FAILS (1710 mm required). The tier is unchanged and nothing
+        in the result says a unit looks wrong: the package converts nothing.
+        """
+        doc = _case("metres_typed_as_millimetres")
+        assert _ssm(_run(doc, "millimetres")).outcome.value == "violated"
+        slipped = _run(doc, "metres_envelope", "envelope_metres")
+        assert _ssm(slipped).outcome.value == "verified"
+        assert slipped.tier is _run(doc, "millimetres").tier
+        assert not any("metre" in c.lower() for c in slipped.checks_skipped)
+
+    def test_a_dropped_sample_is_flagged_only_by_float_luck_is_a_known_review_point(self):
+        """A human must decide how much recording gap is acceptable.
+
+        One dropped sample is a gap of exactly two sample periods and the detector has no
+        tolerance, so it is flagged or not by how the times round: dropping index 7 makes the
+        checks unchecked, dropping index 3 leaves a clean PASS.
+        """
+        doc = _case("dropped_sample")
+        assert _run(doc, "none_dropped").verdict.value == "pass"
+        assert _run(doc, "drop_index_7").verdict.value == "incomplete"
+        assert _run(doc, "drop_index_3").verdict.value == "pass"
+
+    def test_positions_that_disagree_with_the_reported_speed_pass_is_a_known_review_point(self):
+        """A human must decide whether the reported tcp_speed can be trusted.
+
+        The positions move 90,000 mm/s while the reported speed is 300; the speed check trusts
+        the report. A person at 50 mm while the label says reduced_speed also passes.
+        """
+        doc = _case("positions_disagree_with_reported_speed")
+        jump = _run(doc, "jump")
+        assert jump.verdict.value == "pass" and jump.check("speed_limit").outcome.value == "verified"
+        assert _run(doc, "person_at_50mm_in_reduced_speed").verdict.value == "pass"
+        # ... and the result says it did not cross-check them (engine 7 boundary block).
+        speed = next(c for c in jump.to_dict()["checks"] if c["name"] == "speed_limit")
+        assert any("against the speed implied by the recorded positions" in x
+                   for x in speed["boundary"]["not_tested"])
+
+    def test_a_mode_label_decides_which_regime_applies_is_a_known_review_point(self):
+        """A human must decide whether the mode signal is trustworthy.
+
+        A person detected in 'automatic' fails mode_consistency; the identical samples labelled
+        'reduced_speed' pass, because only the automatic label is judged.
+        """
+        doc = _case("mode_label")
+        assert _run(doc, "labelled_automatic").check("mode_consistency").outcome.value == "violated"
+        r = _run(doc, "labelled_reduced_speed")
+        assert r.check("mode_consistency").outcome.value == "verified" and r.verdict.value == "pass"
+
+    def test_extrapolated_stop_time_is_not_scaled_inside_sh_is_a_known_review_point(self):
+        """A human must decide which extrapolation model applies (the standard is not here).
+
+        At 750 mm/s (stop measured at 500) Ss is scaled by the speed ratio squared (120 -> 270)
+        and Ts inside Sh is not, so the engine requires 1905 mm. A model that also scales Ts
+        requires 2105 mm; a 2000 mm separation passes here and would fail under that model.
+        """
+        doc = _case("extrapolated_stop_time")
+        env = SafetyEnvelope.from_dict(doc["envelope"])
+        from assurance.machine.ssm import separation_required
+        b = separation_required(env, robot_speed_mm_s=750.0)
+        assert b.total_mm == 1905.0 and b.robot_stopping_travel_mm == 270.0
+        assert b.human_travel_mm == 560.0       # Ts was not scaled; 0.1 + 0.375 s would be 760
+        assert _ssm(_run(doc, "between_the_two_models")).outcome.value == "verified"
+        assert _ssm(_run(doc, "at_engine_limit")).outcome.value == "verified"
