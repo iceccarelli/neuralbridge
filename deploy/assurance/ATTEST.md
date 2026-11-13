@@ -385,7 +385,23 @@ established. Without a key it says "completeness not checked" (exit 3). A **subj
 `GET /v1/cases/{id}/export` emits) is checked entry by entry and is **exit 3**: it cannot be shown
 complete by this file, with or without a skeleton, and it is never reported as a removed record. It is
 deliberately narrower than the product's verifier (schema 1 only; it never merges a skeleton; anything
-it does not understand is exit 3, never a pass). The independent test suite
+it does not understand is exit 3, never a pass).
+
+**Where the two verifiers' exit codes differ (the standalone is never the more lenient).** The standalone file
+declines to judge what it does not implement; the product verifier calls the same input wrong:
+
+| input | product `evidence verify` | standalone |
+|---|---|---|
+| `ledger_schema_version` other than 1 (e.g. 2) | 1 (the link-hash recipe belongs to a version, so the hashes may be wrong) | 3 (a format this file does not implement; not a finding) |
+| a bare `NaN` / `Infinity` in the JSON (not JSON) | 1 (reads it; the number is reported as a finding) | 2 (not a readable export) |
+| a key file that cannot be read | 2 | 3 (completeness not checked) |
+| a subject export with a skeleton that the product merges to a full anchor | 0 | 3 (never merges a skeleton) |
+| no `--public-key`, intact whole export | 0 ("completeness NOT CHECKED") | 3 (never a bare pass) |
+
+Automation that runs both should treat 0 as the only pass, 1 as a contradiction, and any other code
+as "not established or not readable": none of these differences turns a failing export into a pass.
+
+The independent test suite
 (`neuralbridge-stress-test`, `tests/test_standalone_verifier.py`) checks that it is never more lenient
 than the product's verifier across the tamper matrix, and `tests/test_standalone_verifier_parity.py`
 here runs each input class through both and compares the exit codes.

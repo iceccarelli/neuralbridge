@@ -25,6 +25,7 @@ from __future__ import annotations
 import errno
 import hashlib
 import os
+import re
 import stat
 from dataclasses import dataclass
 from pathlib import Path
@@ -155,6 +156,23 @@ def private_key_file_problems(path: str | Path, *, label: str | None = None) -> 
     return problems
 
 
+_PEM_BLOCK = re.compile(
+    rb"\A\s*(-----BEGIN [A-Z0-9 ]+-----.*?(?:-----END [A-Z0-9 ]+-----))\s*\Z", re.DOTALL)
+
+
+def _one_pem_block(data: bytes, what: str) -> bytes:
+    """*data* if it is exactly one PEM block (surrounding whitespace aside), else ``ValueError``.
+
+    The PEM loader skips text before a block and ignores everything after it, so a file with a
+    note in front, junk behind or a second key appended loaded the FIRST key and said nothing about
+    the rest. A key file is a trust decision: what is not understood is refused, not skipped.
+    """
+    if data.count(b"-----BEGIN ") != 1 or data.count(b"-----END ") != 1 \
+            or _PEM_BLOCK.match(data) is None:
+        raise ValueError(f"{what} must be exactly one PEM block with nothing before or after it")
+    return data
+
+
 def _fingerprint(public_bytes: bytes) -> str:
     """A short, stable name for a key, to print next to a signature.
 
@@ -176,7 +194,7 @@ class VerifyingKey:
     def from_pem(cls, text: str | bytes) -> VerifyingKey:
         data = text.encode("utf-8") if isinstance(text, str) else text
         try:
-            key = serialization.load_pem_public_key(data)
+            key = serialization.load_pem_public_key(_one_pem_block(data, "a public key"))
         except (ValueError, TypeError, UnsupportedAlgorithm) as exc:
             # ``UnsupportedAlgorithm`` is what ``cryptography`` raises for a well-formed
             # key of an algorithm it does not know (an unknown OID). It is not a
@@ -245,7 +263,7 @@ class SigningKey:
         data = text.encode("utf-8") if isinstance(text, str) else text
         try:
             key = serialization.load_pem_private_key(
-                data, password=passphrase.encode("utf-8") if passphrase else None
+                _one_pem_block(data, "a private key"), password=passphrase.encode("utf-8") if passphrase else None
             )
         except TypeError as exc:
             raise SigningKeyError(

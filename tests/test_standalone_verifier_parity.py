@@ -246,3 +246,79 @@ class TestPreChangeArtefactsAreJudgedAsBefore:
 
     def test_without_the_key_nothing_is_a_bare_pass(self):
         assert standalone(str(FIXTURES / "v2.export.json"))[0] == 3
+
+
+def test_a_head_signed_in_the_future_fails_max_age_in_the_standalone_too(tmp_path, capsys):
+    from datetime import UTC, datetime
+
+    from assurance.attest import AttestationLog, SigningKey, attest
+    from assurance.evidence import EvidenceLedger
+
+    from .test_assurance_verifier_rollback import _ev
+
+    led = EvidenceLedger(tmp_path / "f.db")
+    for i in range(3):
+        led.append(_ev(i), subject="C")
+    key = SigningKey.generate()
+    record = attest(led, key, AttestationLog(tmp_path / "f.jsonl"),
+                    now=datetime(2099, 1, 1, tzinfo=UTC))
+    pub = tmp_path / "f.pub"
+    pub.write_text(key.verifying.pem(), encoding="utf-8")
+    bundle = tmp_path / "f.json"
+    bundle.write_text(json.dumps(led.export(anchor=record.to_dict())), encoding="utf-8")
+    assert standalone(str(bundle), "--public-key", str(pub))[0] == 0
+    code, out = standalone(str(bundle), "--public-key", str(pub), "--max-age", "1")
+    assert code == 1 and "signed in the future" in out, out
+
+
+class TestOneKeyBlockAndNothingElse:
+    """The PEM loader skipped text before a block and ignored everything after it, so junk or a
+    second key appended to a key file loaded the FIRST key without a word."""
+
+    @staticmethod
+    def _variants(good: str, other: str) -> dict:
+        return {"junk before": "note to self\n" + good, "junk after": good + "trailing words\n",
+                "second block": good + other, "second block first": other + good,
+                "two begins": good.replace("\n", "\n-----BEGIN PUBLIC KEY-----\n", 1)}
+
+    def test_product_and_standalone_refuse_the_same_files_and_accept_what_the_tools_write(
+            self, history, capsys):
+        from assurance.attest import SigningKey
+        from assurance.attest.keys import SigningKeyError, VerifyingKey
+
+        good = history.key.verifying.pem()
+        other = SigningKey.generate().verifying.pem()
+        bundle = history.write(history.honest)
+        accepted = {"as written": good, "no final newline": good.rstrip("\n"),
+                    "blank lines around": "\n\n" + good + "\n\n", "crlf": good.replace("\n", "\r\n")}
+        for name, text in accepted.items():
+            path = history.root / "ok.pub"
+            path.write_text(text, encoding="utf-8", newline="")
+            VerifyingKey.from_pem(text)
+            assert both(capsys, bundle, "--public-key", str(path))[:2] == (0, 0), name
+        for name, text in self._variants(good, other).items():
+            path = history.root / "bad.pub"
+            path.write_text(text, encoding="utf-8")
+            with pytest.raises(SigningKeyError):
+                VerifyingKey.from_pem(text)
+            product, code, out = both(capsys, bundle, "--public-key", str(path))
+            assert product == 2 and code == 3 and "could not be read" in out, (name, product, code)
+
+    def test_a_private_key_file_with_a_second_block_is_refused_and_the_saved_one_loads(
+            self, tmp_path):
+        import os
+
+        from assurance.attest import SigningKey
+        from assurance.attest.keys import SigningKeyError
+
+        directory = tmp_path / "keys"
+        directory.mkdir(mode=0o700)
+        key = SigningKey.generate()
+        saved = key.save(directory / "k.pem")
+        text = saved.read_text()
+        assert SigningKey.load(saved).fingerprint == key.fingerprint
+        for bad in ("junk\n" + text, text + "junk\n", text + SigningKey.generate().save(
+                directory / "k2.pem").read_text()):
+            with pytest.raises(SigningKeyError):
+                SigningKey.from_pem(bad)
+        assert os.name == "posix"
