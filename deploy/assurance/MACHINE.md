@@ -75,11 +75,13 @@ Three ways a trace can look clean and is not allowed to:
   claim" is what the verdict does, not only what a code comment says.
 
 One thing it cannot tell apart: a separation of `None` means "the sensing system
-detected nobody". Those samples are not checked and are counted in the stated
-limitations (and if *every* separation-controlled sample is `None`, the check is
-`unchecked`), but a CSV cell left blank, or a dropped value, reads the same. That
-is why a column named `separation_m` (or any other unit variant of a field this
-package reads) is refused instead of loading as "nobody detected".
+detected nobody", and a CSV cell left blank, or a dropped value, reads the same.
+So a separation-controlled sample with no separation is **not compared** and is
+counted in the stated limitations, and **if even one such sample has none the check
+is `unchecked`** (not a pass with a count; a violation on another sample still wins
+and is reported as `violated`). That is why a column named `separation_m` (or any
+other unit variant of a field this package reads) is refused instead of loading as
+"nobody detected".
 
 Engine version 3 adds to these rules: a sample in a mode with no declared speed
 limit, a separation-controlled sample with no separation measured, or a contact
@@ -125,7 +127,7 @@ it is:
 | workspace corners | `workspace.minimum/maximum` | mm | −1e7 … 1e7, max > min | `Workspace` |
 | trace time, TCP position | `t`, `tcp` | s, mm | ±1e7 | `Sample` |
 | TCP speed, sensed closing speed | `tcp_speed`, `human_speed` | mm/s | 0 … 1e6 | `Sample` |
-| measured separation | `separation` | mm | 0 … 1e7, or `None` = nobody detected | `Sample` |
+| measured separation | `separation` | mm | 0 … 1e7, or `None` = nobody detected (such a sample is not compared and makes `ssm_separation` `unchecked`) | `Sample` |
 | contact force, contact area | `contact_force`, `contact_area` | N, cm² | 0 … 1e7; area > 0 … 1e6 | `Sample` |
 | sample rate | `sample_rate_hz` | Hz | > 0 … 1e6 | `Trace` |
 | body-region limits, transient multiplier | `max_force_n`, `max_pressure_n_cm2`, `transient_multiplier` | N, N/cm² | > 0 … 1e7 (multiplier ≤ 1000) | `LimitsTable` |
@@ -153,7 +155,53 @@ more than two million samples (the hosted endpoint caps far lower).
   when the declared speed is used, the bundle says so.
 - **Reaction and stop times are taken from the envelope.** They are not re-measured
   from the trace.
+- **Every surface that prints a separation distance says the formula is unverified.**
+  `verify` lists it among the stated limitations (sealed into the bundle); `assurance
+  machine separation` prints it, `--json` carries it as `checks_skipped` and
+  `formula_status: "unverified"`, and so does `POST /v1/machine/separation`. The figure
+  is arithmetic on the numbers supplied, not a risk assessment and not a statement of
+  conformity. The 1600 mm/s default closing speed is the package's default, not a
+  confirmed value of the standard.
+- **`POST /v1/machine/separation` reads JSON numbers only.** A boolean, a string, `NaN`,
+  `Infinity` or an exponent past a float is a 422, as in `quantities.number`; `null` for
+  the optional closing speed means none was supplied.
 
+## The boundary of a result (engine 7)
+
+Every check and the result carry a `boundary` block (`machine/boundary.py`, sealed into
+the bundle body, compared on replay): `tested`, `not_tested`, `inputs_used` (fields and
+the envelope, trace and limits hashes), `observed_vs_declared` (per quantity: `observed`,
+`declared`, `derived` or `mixed`), `assumptions`, `valid_for` and
+`human_review: {required, reasons}`. **`required` is always true** and software never
+decides it; a checker rejects an engine 7 body that lacks the block or says otherwise,
+even resealed and without the originals. `assurance machine verify` prints the result's
+block under the headings *tested*, *not tested*, *assumptions*, *valid for* and
+*qualified human review required*, after the unchanged `not checked:` list.
+
+Engine 7 changes no verdict, check outcome or tier. It adds the block and a stated
+limitation when a **sensed** closing speed replaced the declared one. Bundles sealed by
+engine 6 have neither, are re-run under engine 6's rules (the engine that sealed them,
+never the newest) and verify and replay exactly as before
+(`tests/fixtures/machine_boundary/engine6/`, generated from the unchanged previous
+build). A verifier older than engine 7 rejects an engine 7 bundle as an unknown engine:
+upgrade the package that checks it.
+
+## Qualified human review points
+
+These are behaviours of the engine that a qualified person must decide on. Each is
+pinned by a test named `*_is_a_known_review_point` over a fixture in
+`tests/fixtures/machine_boundary/reference/`; changing one is a change of verdict
+semantics and needs a new engine version.
+
+| # | What the engine does | What the person decides |
+|---|---|---|
+| F3 | A figure's basis (`measured`, a reference, a date) is the filer's word: unsigned and unchecked. An envelope with tiny figures and a `measured` basis passes as `validated` on an attested trace. | Whether the stop, sensing and intrusion figures are real measurements of this machine. |
+| F6 | A sensed `human_speed` (even 0.0) replaces the declared or default closing speed and can flip FAIL to PASS. Engine 7 discloses it; it does not judge it. | Whether the sensed closing speed is trustworthy. |
+| F7 | `tcp_speed` is trusted as recorded (positions are not cross-checked against it); the mode label decides which regime applies (a person at 50 mm labelled `reduced_speed` passes; only `automatic` is judged by `mode_consistency`). | Whether the controller's speed and mode signals are trustworthy. |
+| F8 | Above the speed the stop was measured at, Ss scales with the speed ratio squared but the stop time inside Sh does not (750 mm/s: 1905 mm; a model that also scales Ts: 2105 mm). | Which extrapolation model applies. The standard is not in the repository. |
+| F9 | The gap detector's threshold equals two sample periods with no tolerance, so one dropped sample is flagged or not by float rounding; and a decimal figure exactly at the limit can fail by about 1e-13 mm. | The acceptable recording gap and the tolerance at the limit. |
+| F10 | Nothing converts or detects units: stop, intrusion or uncertainty figures typed in metres can turn FAIL into PASS at the same tier with no caveat. | The units of every figure in the envelope and trace. |
+| – | `workspace_containment` tests the TCP point only, between no samples, and never compares the workspace frame with the trace's; `pfl_contact` is quasi-static only and records no pressure margin; `mode_consistency` reports a count under a `mm` unit; `input_dates` ignores the trace's end. | Whether these scopes fit the application. |
 ## What the tier means, and why it is computed
 
 The tier on a bundle is the floor of every input the verdict rests on:
@@ -200,9 +248,10 @@ reproduces it (it is no longer a static empty set).
 `bench` trace reach `validated`; engine 5 capped it and could not yet verify an
 attestation. `machine check` and `POST /v1/machine/bundle/check` reject a bundle
 that records `validated` without a coherent `recorder_attested` basis, reject
-`recorder_attested` on an engine before 6, and refuse to re-run an engine 5 bundle
-under engine 6 (a different engine). Re-verify the original inputs with engine 6 to
-get a bundle that says what it can support. Changing the `engine_version` field of a
+`recorder_attested` on an engine before 6, and refuse to re-run an engine 5 bundle (this
+build re-runs engines 6 and 7 only, each under the rules of the engine that sealed it).
+Re-verify the original inputs with the current engine to get a bundle that says what it
+can support. Changing the `engine_version` field of a
 resealed body in either direction is caught: down, the claim is rejected as
 impossible for that engine; up, a re-run reports a different engine.
 
