@@ -119,6 +119,17 @@ def main(argv: list[str] | None = None) -> int:
             raise
         print(_operator_message(exc), file=sys.stderr)
         return EXIT_COULD_NOT_RUN
+    except Exception as exc:  # noqa: BLE001 - see below
+        # Anything else (a bug, a missing optional dependency) is still "could not complete": an
+        # uncaught exception exits 1 in Python, the code `watch run` and others use for FINDINGS,
+        # and a cron wrapper that stays silent on 1 would read a crash as a flagged result.
+        # KeyboardInterrupt and SystemExit are not Exceptions and pass through untouched.
+        if os.environ.get("ASSURANCE_DEBUG"):
+            raise
+        print(f"error: could not complete ({type(exc).__name__}: {exc}). Nothing here says the "
+              "run observed anything. Set ASSURANCE_DEBUG=1 to see the traceback.",
+              file=sys.stderr)
+        return EXIT_COULD_NOT_RUN
 
 
 if __name__ == "__main__":
