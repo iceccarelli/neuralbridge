@@ -98,8 +98,8 @@ def test_the_positive_control_an_honest_covered_trace_still_passes_at_validated(
 
 
 def test_the_engine_version_was_bumped_because_the_semantics_changed():
-    assert ENGINE_VERSION == "6"
-    assert run(envelope(), good()).engine_version == "6"
+    assert ENGINE_VERSION == "7"
+    assert run(envelope(), good()).engine_version == "7"
 
 
 # -- (a) speed limit ------------------------------------------------------

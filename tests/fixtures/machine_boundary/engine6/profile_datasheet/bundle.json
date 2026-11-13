@@ -1,0 +1,361 @@
+{
+  "envelope": {
+    "declared_by": {
+      "identifier": "",
+      "kind": "person",
+      "role": ""
+    },
+    "envelope_id": "ENV-1",
+    "human_approach_speed_mm_s": null,
+    "intrusion_distance_mm": 850.0,
+    "max_tcp_speed_mm_s": {
+      "pfl": 250.0,
+      "ssm": 500.0
+    },
+    "notes": "",
+    "pfl_limits_hash": "",
+    "product": "Cell",
+    "product_version": "1.0.0",
+    "stop": {
+      "basis": {
+        "date": "",
+        "kind": "datasheet",
+        "reference": "scanner rev D"
+      },
+      "measured_at_speed_mm_s": 500.0,
+      "reaction_time_s": 0.1,
+      "stop_distance_mm": 120.0,
+      "stop_time_s": 0.25
+    },
+    "uncertainty": {
+      "basis": {
+        "date": "",
+        "kind": "datasheet",
+        "reference": "scanner rev D"
+      },
+      "human_position_mm": 100.0,
+      "robot_position_mm": 50.0
+    },
+    "workspace": {
+      "frame": "cell",
+      "maximum": [
+        1000.0,
+        1000.0,
+        2000.0
+      ],
+      "minimum": [
+        -1000.0,
+        -1000.0,
+        0.0
+      ]
+    }
+  },
+  "evidence": {
+    "actor": {
+      "identifier": "v.grimaldi",
+      "kind": "person",
+      "role": "verification engineer"
+    },
+    "body": {
+      "checks": [
+        {
+          "name": "workspace_containment",
+          "outcome": "verified",
+          "reason": "",
+          "samples_examined": 20,
+          "statement": "The tool centre point stayed inside the declared workspace.",
+          "unit": "mm",
+          "violation_count": 0,
+          "violations": [],
+          "worst_margin": 1000.0
+        },
+        {
+          "name": "speed_limit",
+          "outcome": "verified",
+          "reason": "",
+          "samples_examined": 20,
+          "statement": "TCP speed stayed within the declared limit for the mode in force.",
+          "unit": "mm/s",
+          "violation_count": 0,
+          "violations": [],
+          "worst_margin": 200.0
+        },
+        {
+          "name": "ssm_separation",
+          "outcome": "verified",
+          "reason": "",
+          "samples_examined": 20,
+          "statement": "Measured separation was at least the separation distance computed from the envelope's figures using the formula in ssm.py, at every compared sample.",
+          "unit": "mm",
+          "violation_count": 0,
+          "violations": [],
+          "worst_margin": 1290.0
+        },
+        {
+          "name": "stop_characterisation",
+          "outcome": "verified",
+          "reason": "",
+          "samples_examined": 20,
+          "statement": "The machine never relied on a stopping distance outside the speed range it was measured over.",
+          "unit": "mm/s",
+          "violation_count": 0,
+          "violations": [],
+          "worst_margin": 200.0
+        },
+        {
+          "name": "pfl_contact",
+          "outcome": "not_applicable",
+          "reason": "the envelope makes no power-and-force-limiting claim and the trace records no contact.",
+          "samples_examined": 0,
+          "statement": "Contact force and pressure stayed within the declared body-region limits wherever contact was permitted.",
+          "unit": "",
+          "violation_count": 0,
+          "violations": [],
+          "worst_margin": null
+        },
+        {
+          "name": "mode_consistency",
+          "outcome": "verified",
+          "reason": "",
+          "samples_examined": 20,
+          "statement": "No person was detected while the cell was in unrestricted automatic mode.",
+          "unit": "mm",
+          "violation_count": 0,
+          "violations": [],
+          "worst_margin": null
+        },
+        {
+          "name": "trace_coverage",
+          "outcome": "verified",
+          "reason": "",
+          "samples_examined": 20,
+          "statement": "The trace meets a sanity floor of 10 samples spanning at least 0.1 s (a sanity floor, not a standard) and exercised at least one safety regime: speed and separation monitoring, power and force limiting, or an envelope that claims power and force limiting.",
+          "unit": "",
+          "violation_count": 0,
+          "violations": [],
+          "worst_margin": null
+        },
+        {
+          "name": "input_dates",
+          "outcome": "verified",
+          "reason": "",
+          "samples_examined": 0,
+          "statement": "No input is dated after the moment of verification (a one-day clock tolerance is allowed).",
+          "unit": "",
+          "violation_count": 0,
+          "violations": [],
+          "worst_margin": null
+        }
+      ],
+      "engine_version": "6",
+      "envelope_hash": "edf545a2ea4a7651c87e96910cf891ecb25f2e6f263f02384734257fb0afc4f0",
+      "limits_hash": "",
+      "limits_review": null,
+      "machine_serial": "",
+      "product": "Cell",
+      "product_version": "1.0.0",
+      "provenance": "field",
+      "provenance_assessment": {
+        "attestation_hash": "",
+        "basis": "declared_by_filer",
+        "ceiling": "community",
+        "declared": "field",
+        "explanation": "the trace declares provenance 'field', stated by whoever filed it (source_system 'fw', also their text). Recorder attestation: no readable recorder attestation was supplied (anything unreadable is listed in the findings), so the trace's provenance is only declared by whoever filed it and the tier is capped at community. A declared provenance cannot lift the tier: the result is capped at 'community' and may not be used to claim how the hardware behaves. The route above that cap is a signed recorder attestation accepted under a recorder trust list the verifier holds (assurance.machine.recorder_attestation); it still proves only that a trusted key signed these trace bytes, not that the recording is physically true.",
+        "key_fingerprint": "",
+        "lifts_tier": false
+      },
+      "provenance_basis": "declared_by_filer",
+      "recorder_attestation": {
+        "accepted_attestation": null,
+        "assessed_on": "2026-11-12",
+        "attestation_hash": "",
+        "attestations": [],
+        "attested": false,
+        "explanation": "no readable recorder attestation was supplied (anything unreadable is listed in the findings), so the trace's provenance is only declared by whoever filed it and the tier is capped at community.",
+        "findings": [],
+        "key_fingerprint": "",
+        "status": "none",
+        "trace_hash": "15886ed7a0fd987fc5571ca5f04239b8d781c0a6042947b5060c0af73cf90e5c",
+        "trust_configured": false,
+        "window_checked": true
+      },
+      "schema": "assurance.machine.bundle/1",
+      "tier": "profile",
+      "trace_hash": "15886ed7a0fd987fc5571ca5f04239b8d781c0a6042947b5060c0af73cf90e5c",
+      "trace_id": "RUN-1",
+      "trace_started_at": "2026-09-12T04:31:00Z",
+      "verdict": "pass"
+    },
+    "checks_skipped": [
+      "20 of 20 compared samples used the package DEFAULT approach speed (1600 mm/s) as the person's closing speed: the envelope declares none and the trace recorded none. The default was adopted, not declared by anyone, and is quoted from memory of the standard (see ssm.py).",
+      "provenance_basis declared_by_filer: the trace declares provenance 'field', stated by whoever filed it (source_system 'fw', also their text). Recorder attestation: no readable recorder attestation was supplied (anything unreadable is listed in the findings), so the trace's provenance is only declared by whoever filed it and the tier is capped at community. A declared provenance cannot lift the tier: the result is capped at 'community' and may not be used to claim how the hardware behaves. The route above that cap is a signed recorder attestation accepted under a recorder trust list the verifier holds (assurance.machine.recorder_attestation); it still proves only that a trusted key signed these trace bytes, not that the recording is physically true.",
+      "stopping performance is a datasheet figure (scanner rev D); reaction time 0.100 s and stop time 0.250 s were taken from the envelope and not re-measured from this trace.",
+      "age of the figures this verdict rests on, against the day the trace began: stopping is undated; sensing is undated. No maximum age is applied: a stopping distance measured years ago on a machine since modified passes exactly as a fresh one does, and whether it still describes the machine is the manufacturer's call.",
+      "trace_coverage: a trace shorter than 10 samples or 0.1 s is not accepted as a verification. That is a sanity floor chosen by this package, not a figure from any standard; a run above it is not thereby long enough for any particular claim.",
+      "the separation formula and constants (Sh/Sr/Ss/C/Zd/Zr, the 1600 mm/s default approach speed, the quadratic extrapolation of the stopping distance) are unverified: formula and constants not verified against a licensed copy of the standard. A separation check passes against that computation, not against the standard itself.",
+      "this compares a recorded trace against a declared envelope. It does not establish that the trace came from the machine it names, that the sensing system detected every person present, or that the envelope is the right envelope for this application."
+    ],
+    "confidence": "medium",
+    "content_hash": "cb6240aa94e61f4369bf695114748cee982c395d47840c996501a928869ec631",
+    "kind": "machine.safety_verification",
+    "origin": {
+      "method": "engine 6: recorded trace compared against declared safety envelope",
+      "reference": "Cell 1.0.0 / RUN-1",
+      "system": "assurance.machine"
+    },
+    "recorded_at": "2026-11-12T21:54:20Z",
+    "relations": [
+      {
+        "content_hash": "edf545a2ea4a7651c87e96910cf891ecb25f2e6f263f02384734257fb0afc4f0",
+        "note": "the declared safety envelope",
+        "relation": "concerns"
+      },
+      {
+        "content_hash": "15886ed7a0fd987fc5571ca5f04239b8d781c0a6042947b5060c0af73cf90e5c",
+        "note": "the field trace RUN-1",
+        "relation": "derived_from"
+      }
+    ],
+    "schema_version": "1",
+    "validation_state": "verified"
+  },
+  "result": {
+    "checks": [
+      {
+        "name": "workspace_containment",
+        "outcome": "verified",
+        "reason": "",
+        "samples_examined": 20,
+        "statement": "The tool centre point stayed inside the declared workspace.",
+        "unit": "mm",
+        "violation_count": 0,
+        "violations": [],
+        "worst_margin": 1000.0
+      },
+      {
+        "name": "speed_limit",
+        "outcome": "verified",
+        "reason": "",
+        "samples_examined": 20,
+        "statement": "TCP speed stayed within the declared limit for the mode in force.",
+        "unit": "mm/s",
+        "violation_count": 0,
+        "violations": [],
+        "worst_margin": 200.0
+      },
+      {
+        "name": "ssm_separation",
+        "outcome": "verified",
+        "reason": "",
+        "samples_examined": 20,
+        "statement": "Measured separation was at least the separation distance computed from the envelope's figures using the formula in ssm.py, at every compared sample.",
+        "unit": "mm",
+        "violation_count": 0,
+        "violations": [],
+        "worst_margin": 1290.0
+      },
+      {
+        "name": "stop_characterisation",
+        "outcome": "verified",
+        "reason": "",
+        "samples_examined": 20,
+        "statement": "The machine never relied on a stopping distance outside the speed range it was measured over.",
+        "unit": "mm/s",
+        "violation_count": 0,
+        "violations": [],
+        "worst_margin": 200.0
+      },
+      {
+        "name": "pfl_contact",
+        "outcome": "not_applicable",
+        "reason": "the envelope makes no power-and-force-limiting claim and the trace records no contact.",
+        "samples_examined": 0,
+        "statement": "Contact force and pressure stayed within the declared body-region limits wherever contact was permitted.",
+        "unit": "",
+        "violation_count": 0,
+        "violations": [],
+        "worst_margin": null
+      },
+      {
+        "name": "mode_consistency",
+        "outcome": "verified",
+        "reason": "",
+        "samples_examined": 20,
+        "statement": "No person was detected while the cell was in unrestricted automatic mode.",
+        "unit": "mm",
+        "violation_count": 0,
+        "violations": [],
+        "worst_margin": null
+      },
+      {
+        "name": "trace_coverage",
+        "outcome": "verified",
+        "reason": "",
+        "samples_examined": 20,
+        "statement": "The trace meets a sanity floor of 10 samples spanning at least 0.1 s (a sanity floor, not a standard) and exercised at least one safety regime: speed and separation monitoring, power and force limiting, or an envelope that claims power and force limiting.",
+        "unit": "",
+        "violation_count": 0,
+        "violations": [],
+        "worst_margin": null
+      },
+      {
+        "name": "input_dates",
+        "outcome": "verified",
+        "reason": "",
+        "samples_examined": 0,
+        "statement": "No input is dated after the moment of verification (a one-day clock tolerance is allowed).",
+        "unit": "",
+        "violation_count": 0,
+        "violations": [],
+        "worst_margin": null
+      }
+    ],
+    "checks_skipped": [
+      "20 of 20 compared samples used the package DEFAULT approach speed (1600 mm/s) as the person's closing speed: the envelope declares none and the trace recorded none. The default was adopted, not declared by anyone, and is quoted from memory of the standard (see ssm.py).",
+      "provenance_basis declared_by_filer: the trace declares provenance 'field', stated by whoever filed it (source_system 'fw', also their text). Recorder attestation: no readable recorder attestation was supplied (anything unreadable is listed in the findings), so the trace's provenance is only declared by whoever filed it and the tier is capped at community. A declared provenance cannot lift the tier: the result is capped at 'community' and may not be used to claim how the hardware behaves. The route above that cap is a signed recorder attestation accepted under a recorder trust list the verifier holds (assurance.machine.recorder_attestation); it still proves only that a trusted key signed these trace bytes, not that the recording is physically true.",
+      "stopping performance is a datasheet figure (scanner rev D); reaction time 0.100 s and stop time 0.250 s were taken from the envelope and not re-measured from this trace.",
+      "age of the figures this verdict rests on, against the day the trace began: stopping is undated; sensing is undated. No maximum age is applied: a stopping distance measured years ago on a machine since modified passes exactly as a fresh one does, and whether it still describes the machine is the manufacturer's call.",
+      "trace_coverage: a trace shorter than 10 samples or 0.1 s is not accepted as a verification. That is a sanity floor chosen by this package, not a figure from any standard; a run above it is not thereby long enough for any particular claim.",
+      "the separation formula and constants (Sh/Sr/Ss/C/Zd/Zr, the 1600 mm/s default approach speed, the quadratic extrapolation of the stopping distance) are unverified: formula and constants not verified against a licensed copy of the standard. A separation check passes against that computation, not against the standard itself.",
+      "this compares a recorded trace against a declared envelope. It does not establish that the trace came from the machine it names, that the sensing system detected every person present, or that the envelope is the right envelope for this application."
+    ],
+    "engine_version": "6",
+    "envelope_hash": "edf545a2ea4a7651c87e96910cf891ecb25f2e6f263f02384734257fb0afc4f0",
+    "limits_review": null,
+    "machine_serial": "",
+    "may_claim_physical_behaviour": false,
+    "product": "Cell",
+    "product_version": "1.0.0",
+    "provenance": "field",
+    "provenance_assessment": {
+      "attestation_hash": "",
+      "basis": "declared_by_filer",
+      "ceiling": "community",
+      "declared": "field",
+      "explanation": "the trace declares provenance 'field', stated by whoever filed it (source_system 'fw', also their text). Recorder attestation: no readable recorder attestation was supplied (anything unreadable is listed in the findings), so the trace's provenance is only declared by whoever filed it and the tier is capped at community. A declared provenance cannot lift the tier: the result is capped at 'community' and may not be used to claim how the hardware behaves. The route above that cap is a signed recorder attestation accepted under a recorder trust list the verifier holds (assurance.machine.recorder_attestation); it still proves only that a trusted key signed these trace bytes, not that the recording is physically true.",
+      "key_fingerprint": "",
+      "lifts_tier": false
+    },
+    "provenance_basis": "declared_by_filer",
+    "recorder_attestation": {
+      "accepted_attestation": null,
+      "assessed_on": "2026-11-12",
+      "attestation_hash": "",
+      "attestations": [],
+      "attested": false,
+      "explanation": "no readable recorder attestation was supplied (anything unreadable is listed in the findings), so the trace's provenance is only declared by whoever filed it and the tier is capped at community.",
+      "findings": [],
+      "key_fingerprint": "",
+      "status": "none",
+      "trace_hash": "15886ed7a0fd987fc5571ca5f04239b8d781c0a6042947b5060c0af73cf90e5c",
+      "trust_configured": false,
+      "window_checked": true
+    },
+    "tier": "profile",
+    "trace_hash": "15886ed7a0fd987fc5571ca5f04239b8d781c0a6042947b5060c0af73cf90e5c",
+    "trace_id": "RUN-1",
+    "verdict": "pass",
+    "verified_at": "2026-11-12T21:54:20.309792Z"
+  },
+  "schema": "assurance.machine.bundle/1"
+}

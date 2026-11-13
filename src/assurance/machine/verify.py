@@ -33,9 +33,15 @@ from datetime import UTC, date, datetime, timedelta
 from enum import StrEnum
 from typing import Any
 
+from assurance.core.errors import AssuranceError
 from assurance.core.identity import utc_now
 from assurance.core.tiers import AssuranceTier
 from assurance.machine import provenance_trust
+from assurance.machine.boundary import (
+    FIRST_ENGINE_WITH_BOUNDARY,
+    check_boundary,
+    result_boundary,
+)
 from assurance.machine.envelope import SafetyEnvelope
 from assurance.machine.limits import LimitsTable
 from assurance.machine.limits_review import LimitsReviewAssessment, ReviewTrust, assess_reviews
@@ -47,12 +53,14 @@ __all__ = [
     "FORMULA_LIMITATION",
     "MIN_TRACE_DURATION_S",
     "MIN_TRACE_SAMPLES",
+    "OLDEST_RUNNABLE_ENGINE",
     "CheckOutcome",
     "CheckResult",
     "Verdict",
     "VerificationResult",
     "Violation",
     "is_known_engine",
+    "is_runnable_engine",
     "parse_engine_version",
     "verify",
 ]
@@ -89,7 +97,28 @@ __all__ = [
 #:    attestations as supplied) and ``machine_serial``. A bundle is believed to carry
 #:    ``recorder_attested`` only if the checker's own re-assessment reproduces it;
 #:    engine 5 and earlier bundles can never be read as recorder-attested.
-ENGINE_VERSION = "6"
+#: 7: a closing speed the TRACE reports (``human_speed``) that stands in for the envelope's
+#:    declared or default approach speed is disclosed in the stated limitations: how many
+#:    compared samples used it, the lowest value seen, and how many were below the figure the
+#:    envelope would otherwise have used. A sensed speed below that figure shortens Sh and
+#:    can turn a failing separation into a passing one (a sensed 0.0 replaces 1600 mm/s with
+#:    nothing said); until engine 6 the result stated only declared and default use. The
+#:    result and every check also carry a ``boundary`` block (``machine/boundary.py``): what was
+#:    tested and not tested, the inputs used, observed versus declared per quantity, the
+#:    assumptions, the scope, and that qualified human review is required (always true). No
+#:    check outcome, verdict or tier changes. Engine 6 results are still produced by this build
+#:    (``verify(..., engine_version="6")``) and bundles sealed by engine 6 are replayed under
+#:    engine 6's rules, byte for byte (``bundle.check_bundle_data``).
+ENGINE_VERSION = "7"
+
+#: The engine that first states, in the result, that a sensed closing speed replaced the declared one.
+_FIRST_ENGINE_DISCLOSING_SENSED_SPEED = 7
+
+#: The oldest engine this build can still RUN. A bundle names the engine that sealed it, and
+#: the checker re-runs that engine, not the newest one: a re-run under different rules is not
+#: a reproduction. Engines before this one are recognised (``is_known_engine``) but their sets
+#: of checks and rules are not reproduced here.
+OLDEST_RUNNABLE_ENGINE = 6
 
 _ENGINE_SPELLING = re.compile(r"[1-9][0-9]{0,3}", re.ASCII)
 
@@ -106,6 +135,12 @@ def parse_engine_version(value: object) -> int | None:
     if type(value) is not str or not _ENGINE_SPELLING.fullmatch(value):
         return None
     return int(value)
+
+
+def is_runnable_engine(value: object) -> bool:
+    """Can this build re-run the engine ``value`` names (:data:`OLDEST_RUNNABLE_ENGINE` up)?"""
+    n = parse_engine_version(value)
+    return n is not None and OLDEST_RUNNABLE_ENGINE <= n <= int(ENGINE_VERSION)
 
 
 def is_known_engine(value: object) -> bool:
@@ -219,9 +254,12 @@ class CheckResult:
     unit: str = ""
     #: Why the check could not run, when outcome is UNCHECKED.
     reason: str = ""
+    #: What this check covers and where it stops (``machine/boundary.py``); engine 7 and
+    #: later. ``None`` for engine 6, whose serialised check has no such key.
+    boundary: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        out = {
             "name": self.name,
             "outcome": self.outcome.value,
             "statement": self.statement,
@@ -232,6 +270,9 @@ class CheckResult:
             "unit": self.unit,
             "reason": self.reason,
         }
+        if self.boundary is not None:
+            out["boundary"] = self.boundary
+        return out
 
 
 @dataclass(frozen=True)
@@ -262,6 +303,9 @@ class VerificationResult:
     #: The machine unit the verification is about, if known (checked against the
     #: attestation's machine reference). Empty: the product line.
     machine_serial: str = ""
+    #: What the result covers and where it stops, in machine-readable form
+    #: (``machine/boundary.py``); engine 7 and later, ``None`` for engine 6.
+    boundary: dict[str, Any] | None = None
 
     @property
     def violations(self) -> list[Violation]:
@@ -287,6 +331,12 @@ class VerificationResult:
         return next((c for c in self.checks if c.name == name), None)
 
     def to_dict(self) -> dict[str, Any]:
+        out = self._to_dict_v6()
+        if self.boundary is not None:
+            out["boundary"] = self.boundary
+        return out
+
+    def _to_dict_v6(self) -> dict[str, Any]:
         return {
             "engine_version": self.engine_version,
             "envelope_hash": self.envelope_hash,
@@ -491,7 +541,9 @@ def _speed_limit(envelope: SafetyEnvelope, trace: Trace) -> CheckResult:
     return _across_gaps(result, trace, lambda _s: True)
 
 
-def _ssm_separation(envelope: SafetyEnvelope, trace: Trace) -> tuple[CheckResult, list[str]]:
+def _ssm_separation(
+    envelope: SafetyEnvelope, trace: Trace, engine: int = int(ENGINE_VERSION),
+) -> tuple[CheckResult, list[str]]:
     """The check that is the whole reason this package exists."""
     caveats: list[str] = []
     violations: list[Violation] = []
@@ -501,6 +553,7 @@ def _ssm_separation(envelope: SafetyEnvelope, trace: Trace) -> tuple[CheckResult
     extrapolated = 0
     declared_speed_used = 0
     default_speed_used = 0
+    sensed_speeds: list[float] = []
 
     relevant = [(i, s) for i, s in enumerate(trace.samples)
                 if s.mode.separation_is_the_control]
@@ -526,6 +579,8 @@ def _ssm_separation(envelope: SafetyEnvelope, trace: Trace) -> tuple[CheckResult
             declared_speed_used += 1
         elif breakdown.human_speed_source == "default":
             default_speed_used += 1
+        else:
+            sensed_speeds.append(breakdown.human_speed_mm_s)
         required = breakdown.total_mm
         if s.separation < required:
             violations.append(Violation(
@@ -570,6 +625,20 @@ def _ssm_separation(envelope: SafetyEnvelope, trace: Trace) -> tuple[CheckResult
             "person's closing speed: the envelope declares none and the trace "
             "recorded none. The default was adopted, not declared by anyone, and is "
             "quoted from memory of the standard (see ssm.py)."
+        )
+    if sensed_speeds and engine >= _FIRST_ENGINE_DISCLOSING_SENSED_SPEED:
+        fallback = envelope.approach_speed_mm_s
+        below = sum(1 for v in sensed_speeds if v < fallback)
+        caveats.append(
+            f"{len(sensed_speeds)} of {examined} compared samples used the closing speed "
+            "the trace itself reports (human_speed) in place of the envelope's "
+            f"{'declared' if envelope.approach_speed_declared else 'default'} "
+            f"{fallback:.0f} mm/s. The lowest reported value was {min(sensed_speeds):g} "
+            f"mm/s, and {below} of those samples reported less than {fallback:.0f} "
+            "mm/s. A reported closing speed below the declared one shortens Sh and can "
+            "turn a failing separation into a passing one; this check cannot tell a "
+            "person who is standing still from a sensor that reports zero, and the "
+            "envelope carries no evidence basis for a sensed figure."
         )
 
     if violations:
@@ -963,6 +1032,7 @@ def verify(
     recorder_trust: RecorderTrust | None = None,
     machine_serial: str = "",
     now: datetime | None = None,
+    engine_version: str = ENGINE_VERSION,
 ) -> VerificationResult:
     """Check one run against one envelope.
 
@@ -978,16 +1048,25 @@ def verify(
     ``now`` is the moment of verification, used only to judge whether an input is
     dated in the future; it defaults to the clock.
 
+    ``engine_version`` is the engine whose rules to apply (default: the newest). It exists
+    so a checker can re-run a bundle under the rules of the engine that sealed it
+    (:func:`is_runnable_engine`); sealing always uses the newest.
+
     The returned tier is the weakest of everything the verdict rests on. It is
     computed, never passed in, because a tier a caller can assert is a tier that
     will be asserted.
     """
+    if not is_runnable_engine(engine_version):
+        raise AssuranceError(
+            f"engine {engine_version!r} cannot be run by this build, which runs engines "
+            f"{OLDEST_RUNNABLE_ENGINE} to {ENGINE_VERSION}.")
+    engine = int(engine_version)
     checks: list[CheckResult] = []
     caveats: list[str] = []
 
     checks.append(_workspace_containment(envelope, trace))
     checks.append(_speed_limit(envelope, trace))
-    ssm, ssm_caveats = _ssm_separation(envelope, trace)
+    ssm, ssm_caveats = _ssm_separation(envelope, trace, engine)
     checks.append(ssm)
     caveats.extend(ssm_caveats)
     checks.append(_stop_characterisation(envelope, trace))
@@ -1074,6 +1153,26 @@ def verify(
         "envelope for this application."
     )
 
+    boundary: dict[str, Any] | None = None
+    if engine >= FIRST_ENGINE_WITH_BOUNDARY:
+        limits_hash = limits.content_hash() if limits is not None else ""
+        env_hash, trace_hash = envelope.content_hash(), trace.content_hash()
+        blocks = []
+        stamped = []
+        for c in checks:
+            block = check_boundary(
+                c.name, envelope=envelope, trace=trace, envelope_hash=env_hash,
+                trace_hash=trace_hash, limits_hash=limits_hash, outcome=c.outcome.value,
+                reason=c.reason)
+            if c.outcome is not CheckOutcome.NOT_APPLICABLE:
+                # What the result rests on: a check that did not apply read nothing.
+                blocks.append((c.name, block))
+            stamped.append(replace(c, boundary=block))
+        checks = stamped
+        boundary = result_boundary(
+            blocks, envelope=envelope, envelope_hash=env_hash, trace_hash=trace_hash,
+            limits_hash=limits_hash)
+
     return VerificationResult(
         envelope_hash=envelope.content_hash(),
         trace_hash=trace.content_hash(),
@@ -1081,7 +1180,7 @@ def verify(
         product_version=envelope.product_version,
         trace_id=trace.trace_id,
         provenance=trace.provenance.value,
-        engine_version=ENGINE_VERSION,
+        engine_version=engine_version,
         checks=tuple(checks),
         checks_skipped=tuple(caveats),
         tier=tier,
@@ -1091,5 +1190,6 @@ def verify(
         provenance_assessment=prov.to_dict(),
         recorder_attestation=prov.attestation.to_dict() if prov.attestation else None,
         machine_serial=machine_serial,
+        boundary=boundary,
     )
 

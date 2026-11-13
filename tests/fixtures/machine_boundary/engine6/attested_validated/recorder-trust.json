@@ -1,0 +1,16 @@
+{
+  "format": "assurance.machine.recorder-trust.v1",
+  "recorders": [
+    {
+      "fingerprint": "661b914f91351b6a",
+      "label": "test recorder",
+      "provenance": [
+        "bench",
+        "field"
+      ],
+      "public_key_pem": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEABFg5fh2rjd0QRxJrYwjYgZEL/FfvlylZvi6JrYgt77Q=\n-----END PUBLIC KEY-----\n",
+      "revoked": false,
+      "revoked_on": ""
+    }
+  ]
+}

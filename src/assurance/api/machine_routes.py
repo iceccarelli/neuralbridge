@@ -65,7 +65,7 @@ from assurance.machine.recorder_attestation import (
     RecorderTrust,
     refuse_private_key,
 )
-from assurance.machine.ssm import separation_required
+from assurance.machine.ssm import separation_disclosures, separation_required
 from assurance.machine.trace import Trace
 
 __all__ = ["machine_router"]
@@ -153,25 +153,38 @@ _VERIFY_GATE = _Gate(MAX_CONCURRENT_VERIFICATIONS, MAX_WAITING_VERIFICATIONS,
                      MAX_VERIFICATIONS_PER_ACCOUNT)
 
 
+def _quantity(description: str, *, default: Any = ..., **bounds: float) -> Any:
+    """A physical quantity in a request body: a JSON number, nothing else.
+
+    Pydantic's default ``float`` is lax: ``true`` becomes 1.0 (a boolean turned a 1.0 s
+    reaction time into a 3420 mm answer), ``"1.0"`` and ``" 1 "`` are parsed, and NaN or
+    infinity pass a ``ge`` bound. ``strict=True`` refuses booleans and strings and still
+    accepts a JSON integer or float; ``allow_inf_nan=False`` refuses NaN, ``Infinity`` and
+    an exponent too large for a float. This is the same rule ``machine.quantities.number``
+    applies to every figure the engine reads (docs/claims-registry.md, "Physical
+    statements"), applied before the model is built so a refusal is a 422, not an answer.
+    """
+    return Field(default, strict=True, allow_inf_nan=False, description=description, **bounds)
+
+
 class SeparationIn(BaseModel):
     """The six inputs an integrator already has written down somewhere."""
 
     model_config = ConfigDict(extra="forbid")
 
-    robot_speed_mm_s: float = Field(ge=0, description="TCP speed under SSM, mm/s")
-    reaction_time_s: float = Field(ge=0, description="Tr: detection to stop command")
-    stop_time_s: float = Field(ge=0, description="Ts: stop command to standstill")
-    stop_distance_mm: float = Field(ge=0, description="travel during Ts")
-    measured_at_speed_mm_s: float = Field(
-        gt=0, description="the speed the stop distance was actually measured at")
-    intrusion_distance_mm: float = Field(
-        ge=0, description="C, per ISO 13855, for the body part that can reach in")
-    human_position_uncertainty_mm: float = Field(default=0.0, ge=0, description="Zd")
-    robot_position_uncertainty_mm: float = Field(default=0.0, ge=0, description="Zr")
-    human_speed_mm_s: float | None = Field(
-        default=None, ge=0,
-        description="closing speed if the sensing system reports it; "
-                    "omit for the ISO 13855 walking figure")
+    robot_speed_mm_s: float = _quantity("TCP speed under SSM, mm/s", ge=0)
+    reaction_time_s: float = _quantity("Tr: detection to stop command", ge=0)
+    stop_time_s: float = _quantity("Ts: stop command to standstill", ge=0)
+    stop_distance_mm: float = _quantity("travel during Ts", ge=0)
+    measured_at_speed_mm_s: float = _quantity(
+        "the speed the stop distance was actually measured at", gt=0)
+    intrusion_distance_mm: float = _quantity(
+        "C, per ISO 13855, for the body part that can reach in", ge=0)
+    human_position_uncertainty_mm: float = _quantity("Zd", default=0.0, ge=0)
+    robot_position_uncertainty_mm: float = _quantity("Zr", default=0.0, ge=0)
+    human_speed_mm_s: float | None = _quantity(
+        "closing speed if the sensing system reports it; omit to use the package's "
+        "default (1600 mm/s, UNVERIFIED against the standard)", default=None, ge=0)
 
 
 class VerifyIn(BaseModel):
@@ -365,9 +378,12 @@ async def separation(
         )
     if body.human_speed_mm_s is None:
         notes.append(
-            "No closing speed was supplied, so the ISO 13855 walking figure of "
-            f"{breakdown.human_speed_mm_s:.0f} mm/s was used. A directed approach "
-            "at short range is normally taken as 2000 mm/s."
+            "No closing speed was supplied, so the default closing speed of "
+            f"{breakdown.human_speed_mm_s:.0f} mm/s was used (the package's figure for "
+            "the ISO 13855 walking figure, UNVERIFIED: no copy of the standard is here to "
+            "confirm it). The package also lists 2000 mm/s for a directed approach at "
+            "short range, equally unverified. Supply the closing speed your sensing "
+            "system reports if you have one."
         )
 
     result = {
@@ -375,10 +391,10 @@ async def separation(
         "breakdown": breakdown.to_dict(),
         "explain": breakdown.explain(),
         "notes": notes,
-        "checks_skipped": [
-            "this is arithmetic on the figures you supplied. It does not confirm "
-            "they describe your machine, and it is not a risk assessment.",
-        ],
+        # Machine-readable: the formula and its constants are not checked against the
+        # standard. The same statements, in the same words, as `assurance machine separation`.
+        "formula_status": "unverified",
+        "checks_skipped": separation_disclosures(),
     }
     meter.commit(response)
     return result

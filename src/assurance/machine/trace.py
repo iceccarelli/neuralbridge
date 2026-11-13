@@ -239,8 +239,10 @@ class Sample:
     tcp_speed: float
     mode: OperatingMode
     #: Minimum measured distance to the nearest detected person, mm.
-    #: ``None`` means the sensing system detected nobody — which is a claim in
-    #: itself, and is only as good as the sensing system's coverage.
+    #: ``None`` means the sensing system detected nobody — a claim in itself, only as
+    #: good as the sensing system's coverage, and indistinguishable from a dead sensor or a
+    #: column that was not recorded. A separation-controlled sample with ``None`` is NOT
+    #: compared, and one such sample makes ``ssm_separation`` ``unchecked``.
     separation: float | None = None
     #: Closing speed of the detected person, mm/s, when the sensing system
     #: reports it. ``None`` falls back to the envelope's declared figure.

@@ -1,0 +1,53 @@
+{
+  "alone": {
+    "believed_tier": "community",
+    "internally_consistent": true,
+    "level": "integrity_only",
+    "limitations": [
+      "NOT CHECKED: the original envelope and trace were not supplied, so only the bundle's internal integrity was confirmed. Nothing here shows the machine behaved as the bundle says."
+    ],
+    "ok": true,
+    "problems": [],
+    "provenance_basis": "declared_by_filer",
+    "provenance_reassessed": "not_applicable",
+    "reassessment_note": "",
+    "replayed": false,
+    "seal_intact": true,
+    "verified": [
+      "the sealed evidence object still hashes to the hash it carries",
+      "the recorded checks are exactly the 8 that engine '6' produces, none missing, none invented",
+      "the recorded verdict 'pass' agrees with the bundle's own 8 checks (0 violated, 0 unchecked)",
+      "the recorded tier 'community' is one the engine can produce from the recorded provenance 'field' (not 'certified', not above that provenance's ceiling)",
+      "the unsealed result block agrees with the sealed verdict, tier, provenance, checks and stated limitations",
+      "the envelope copy in the bundle hashes to the envelope hash sealed inside the evidence",
+      "the recorded tier is not above the ceiling ('validated') that the envelope copy in the bundle allows"
+    ]
+  },
+  "generated_from": "git 2b41ddb (unchanged main), engine 6",
+  "note": "PASS only because a sensed human_speed of 0.0 replaced the 1600 mm/s default (the same trace without it is FAIL). Engine 6 states nothing about the substitution.",
+  "recorded_tier": "community",
+  "verdict": "pass",
+  "with_originals": {
+    "believed_tier": "community",
+    "internally_consistent": true,
+    "level": "reproduced",
+    "limitations": [],
+    "ok": true,
+    "problems": [],
+    "provenance_basis": "declared_by_filer",
+    "provenance_reassessed": "not_applicable",
+    "reassessment_note": "",
+    "replayed": true,
+    "seal_intact": true,
+    "verified": [
+      "the sealed evidence object still hashes to the hash it carries",
+      "the recorded checks are exactly the 8 that engine '6' produces, none missing, none invented",
+      "the recorded verdict 'pass' agrees with the bundle's own 8 checks (0 violated, 0 unchecked)",
+      "the recorded tier 'community' is one the engine can produce from the recorded provenance 'field' (not 'certified', not above that provenance's ceiling)",
+      "the unsealed result block agrees with the sealed verdict, tier, provenance, checks and stated limitations",
+      "the envelope copy in the bundle hashes to the envelope hash sealed inside the evidence",
+      "the recorded tier is not above the ceiling ('validated') that the envelope copy in the bundle allows",
+      "re-running engine '6' on the supplied envelope and trace reproduces every sealed check, the verdict, tier, provenance, trace identity and start time, the stated limitations and the confidence"
+    ]
+  }
+}

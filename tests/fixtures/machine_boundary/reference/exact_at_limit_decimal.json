@@ -1,0 +1,388 @@
+{
+ "case": "exact_at_limit_decimal",
+ "description": "KNOWN REVIEW POINT (F9). In exact decimal arithmetic the required distance is 1399.8 mm; a trace reporting 1399.8 is exactly at the limit. In float arithmetic the engine computes 1399.8000000000002 and FAILS it by 2.3e-13 mm. A human must decide the tolerance at the limit.",
+ "envelope": {
+  "declared_by": {
+   "identifier": "",
+   "kind": "person",
+   "role": ""
+  },
+  "envelope_id": "ENV-1",
+  "human_approach_speed_mm_s": 2000.0,
+  "intrusion_distance_mm": 612.7,
+  "max_tcp_speed_mm_s": {
+   "automatic": 2000.0,
+   "reduced_speed": 250.0,
+   "ssm": 500.0
+  },
+  "notes": "",
+  "pfl_limits_hash": "",
+  "product": "Cell",
+  "product_version": "1.0.0",
+  "stop": {
+   "basis": {
+    "date": "2026-03-11",
+    "kind": "measured",
+    "reference": "STOP-TEST-1"
+   },
+   "measured_at_speed_mm_s": 500.0,
+   "reaction_time_s": 0.1,
+   "stop_distance_mm": 120.5,
+   "stop_time_s": 0.2
+  },
+  "uncertainty": {
+   "basis": {
+    "date": "2026-03-11",
+    "kind": "measured",
+    "reference": "STOP-TEST-1"
+   },
+   "human_position_mm": 33.3,
+   "robot_position_mm": 33.3
+  },
+  "workspace": {
+   "frame": "cell",
+   "maximum": [
+    1000.0,
+    1000.0,
+    2000.0
+   ],
+   "minimum": [
+    -1000.0,
+    -1000.0,
+    0.0
+   ]
+  }
+ },
+ "expected": {
+  "decimal_exactly_at_limit": {
+   "checks": {
+    "input_dates": "verified",
+    "mode_consistency": "verified",
+    "pfl_contact": "not_applicable",
+    "speed_limit": "verified",
+    "ssm_separation": "violated",
+    "stop_characterisation": "verified",
+    "trace_coverage": "verified",
+    "workspace_containment": "verified"
+   },
+   "tier": "community",
+   "verdict": "fail"
+  }
+ },
+ "notes": {
+  "decimal_exact_required_mm": "1399.8",
+  "engine_required_mm": "1399.8000000000002"
+ },
+ "traces": {
+  "decimal_exactly_at_limit": {
+   "conditions": {},
+   "provenance": "field",
+   "sample_rate_hz": 50.0,
+   "samples": [
+    {
+     "body_region": "",
+     "contact_area": null,
+     "contact_force": null,
+     "human_speed": null,
+     "mode": "ssm",
+     "separation": 1399.8,
+     "t": 0.0,
+     "tcp": [
+      0.0,
+      0.0,
+      1000.0
+     ],
+     "tcp_speed": 0.0
+    },
+    {
+     "body_region": "",
+     "contact_area": null,
+     "contact_force": null,
+     "human_speed": null,
+     "mode": "ssm",
+     "separation": 1399.8,
+     "t": 0.02,
+     "tcp": [
+      0.0,
+      0.0,
+      1000.0
+     ],
+     "tcp_speed": 0.0
+    },
+    {
+     "body_region": "",
+     "contact_area": null,
+     "contact_force": null,
+     "human_speed": null,
+     "mode": "ssm",
+     "separation": 1399.8,
+     "t": 0.04,
+     "tcp": [
+      0.0,
+      0.0,
+      1000.0
+     ],
+     "tcp_speed": 0.0
+    },
+    {
+     "body_region": "",
+     "contact_area": null,
+     "contact_force": null,
+     "human_speed": null,
+     "mode": "ssm",
+     "separation": 1399.8,
+     "t": 0.06,
+     "tcp": [
+      0.0,
+      0.0,
+      1000.0
+     ],
+     "tcp_speed": 0.0
+    },
+    {
+     "body_region": "",
+     "contact_area": null,
+     "contact_force": null,
+     "human_speed": null,
+     "mode": "ssm",
+     "separation": 1399.8,
+     "t": 0.08,
+     "tcp": [
+      0.0,
+      0.0,
+      1000.0
+     ],
+     "tcp_speed": 0.0
+    },
+    {
+     "body_region": "",
+     "contact_area": null,
+     "contact_force": null,
+     "human_speed": null,
+     "mode": "ssm",
+     "separation": 1399.8,
+     "t": 0.1,
+     "tcp": [
+      0.0,
+      0.0,
+      1000.0
+     ],
+     "tcp_speed": 0.0
+    },
+    {
+     "body_region": "",
+     "contact_area": null,
+     "contact_force": null,
+     "human_speed": null,
+     "mode": "ssm",
+     "separation": 1399.8,
+     "t": 0.12,
+     "tcp": [
+      0.0,
+      0.0,
+      1000.0
+     ],
+     "tcp_speed": 0.0
+    },
+    {
+     "body_region": "",
+     "contact_area": null,
+     "contact_force": null,
+     "human_speed": null,
+     "mode": "ssm",
+     "separation": 1399.8,
+     "t": 0.14,
+     "tcp": [
+      0.0,
+      0.0,
+      1000.0
+     ],
+     "tcp_speed": 0.0
+    },
+    {
+     "body_region": "",
+     "contact_area": null,
+     "contact_force": null,
+     "human_speed": null,
+     "mode": "ssm",
+     "separation": 1399.8,
+     "t": 0.16,
+     "tcp": [
+      0.0,
+      0.0,
+      1000.0
+     ],
+     "tcp_speed": 0.0
+    },
+    {
+     "body_region": "",
+     "contact_area": null,
+     "contact_force": null,
+     "human_speed": null,
+     "mode": "ssm",
+     "separation": 1399.8,
+     "t": 0.18,
+     "tcp": [
+      0.0,
+      0.0,
+      1000.0
+     ],
+     "tcp_speed": 0.0
+    },
+    {
+     "body_region": "",
+     "contact_area": null,
+     "contact_force": null,
+     "human_speed": null,
+     "mode": "ssm",
+     "separation": 1399.8,
+     "t": 0.2,
+     "tcp": [
+      0.0,
+      0.0,
+      1000.0
+     ],
+     "tcp_speed": 0.0
+    },
+    {
+     "body_region": "",
+     "contact_area": null,
+     "contact_force": null,
+     "human_speed": null,
+     "mode": "ssm",
+     "separation": 1399.8,
+     "t": 0.22,
+     "tcp": [
+      0.0,
+      0.0,
+      1000.0
+     ],
+     "tcp_speed": 0.0
+    },
+    {
+     "body_region": "",
+     "contact_area": null,
+     "contact_force": null,
+     "human_speed": null,
+     "mode": "ssm",
+     "separation": 1399.8,
+     "t": 0.24,
+     "tcp": [
+      0.0,
+      0.0,
+      1000.0
+     ],
+     "tcp_speed": 0.0
+    },
+    {
+     "body_region": "",
+     "contact_area": null,
+     "contact_force": null,
+     "human_speed": null,
+     "mode": "ssm",
+     "separation": 1399.8,
+     "t": 0.26,
+     "tcp": [
+      0.0,
+      0.0,
+      1000.0
+     ],
+     "tcp_speed": 0.0
+    },
+    {
+     "body_region": "",
+     "contact_area": null,
+     "contact_force": null,
+     "human_speed": null,
+     "mode": "ssm",
+     "separation": 1399.8,
+     "t": 0.28,
+     "tcp": [
+      0.0,
+      0.0,
+      1000.0
+     ],
+     "tcp_speed": 0.0
+    },
+    {
+     "body_region": "",
+     "contact_area": null,
+     "contact_force": null,
+     "human_speed": null,
+     "mode": "ssm",
+     "separation": 1399.8,
+     "t": 0.3,
+     "tcp": [
+      0.0,
+      0.0,
+      1000.0
+     ],
+     "tcp_speed": 0.0
+    },
+    {
+     "body_region": "",
+     "contact_area": null,
+     "contact_force": null,
+     "human_speed": null,
+     "mode": "ssm",
+     "separation": 1399.8,
+     "t": 0.32,
+     "tcp": [
+      0.0,
+      0.0,
+      1000.0
+     ],
+     "tcp_speed": 0.0
+    },
+    {
+     "body_region": "",
+     "contact_area": null,
+     "contact_force": null,
+     "human_speed": null,
+     "mode": "ssm",
+     "separation": 1399.8,
+     "t": 0.34,
+     "tcp": [
+      0.0,
+      0.0,
+      1000.0
+     ],
+     "tcp_speed": 0.0
+    },
+    {
+     "body_region": "",
+     "contact_area": null,
+     "contact_force": null,
+     "human_speed": null,
+     "mode": "ssm",
+     "separation": 1399.8,
+     "t": 0.36,
+     "tcp": [
+      0.0,
+      0.0,
+      1000.0
+     ],
+     "tcp_speed": 0.0
+    },
+    {
+     "body_region": "",
+     "contact_area": null,
+     "contact_force": null,
+     "human_speed": null,
+     "mode": "ssm",
+     "separation": 1399.8,
+     "t": 0.38,
+     "tcp": [
+      0.0,
+      0.0,
+      1000.0
+     ],
+     "tcp_speed": 0.0
+    }
+   ],
+   "source_system": "fw",
+   "started_at": "2026-09-12T04:31:00Z",
+   "trace_id": "RUN-1"
+  }
+ }
+}

@@ -173,8 +173,8 @@ class TestTheReproducedDefect:
         assert "filer's own declaration" in text
 
     def test_the_engine_was_bumped_so_old_bundles_are_never_reinterpreted(self):
-        assert ENGINE_VERSION == "6"
-        assert verify(envelope(), laptop_trace()).engine_version == "6"
+        assert ENGINE_VERSION == "7"
+        assert verify(envelope(), laptop_trace()).engine_version == "7"
 
     def test_an_honest_declared_bundle_still_checks_and_replays(self):
         raw, env, tr = honest_raw()

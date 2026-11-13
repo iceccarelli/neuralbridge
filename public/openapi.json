@@ -2099,7 +2099,7 @@
                 "type": "null"
               }
             ],
-            "description": "closing speed if the sensing system reports it; omit for the ISO 13855 walking figure",
+            "description": "closing speed if the sensing system reports it; omit to use the package's default (1600 mm/s, UNVERIFIED against the standard)",
             "title": "Human Speed Mm S"
           },
           "intrusion_distance_mm": {
