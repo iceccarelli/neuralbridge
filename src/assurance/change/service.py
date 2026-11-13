@@ -22,6 +22,7 @@ from __future__ import annotations
 import random
 import re
 import time
+import unicodedata
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
 from typing import TypeVar
@@ -32,6 +33,7 @@ from assurance.core.evidence import Actor
 from assurance.core.identity import content_hash_of, format_utc, parse_utc, utc_now
 from assurance.core.text import neutralise
 from assurance.core.tiers import AssuranceTier
+from assurance.fleet.advisory import fold_text
 from assurance.fleet.impact import Exposure, ImpactReport
 from assurance.machine.recorder_attestation import RecorderTrust
 from assurance.machinery.divergence import FUNCTION_CHANGE_PREFIX, Divergence, Severity
@@ -70,6 +72,7 @@ __all__ = [
     "UntrustedAdvisoryError",
     "advance",
     "advisory_case_id",
+    "advisory_case_id_in",
     "assess_advisory",
     "assess_drift",
     "assess_intervention",
@@ -154,9 +157,14 @@ def advisory_case_id(impact: ImpactReport) -> str:
     return _case_id(TriggerType.SUPPLIER_ADVISORY, _advisory_trigger(impact))
 
 
-def _advisory_link_note(impact: ImpactReport) -> str:
+def _clean_issuer(issuer: str) -> str:
+    """The issuer without invisible characters, which a spelling can carry and a person cannot see."""
+    return "".join(c for c in issuer if unicodedata.category(c) not in ("Cf", "Cc"))
+
+
+def _advisory_link_note(advisory_id: str, issuer: str) -> str:
     """The note the case's ``concerns`` link to this advisory carries (see :func:`assess_advisory`)."""
-    return f"advisory {neutralise(impact.advisory_id)} from {neutralise(impact.issued_by)}"
+    return f"advisory {neutralise(advisory_id)} from {neutralise(_clean_issuer(issuer))}"
 
 
 def _advisory_links(case: ChangeAssuranceCase) -> list[dict[str, str]]:
@@ -164,8 +172,14 @@ def _advisory_links(case: ChangeAssuranceCase) -> list[dict[str, str]]:
             if r.get("relation") == "concerns" and r.get("note", "").startswith("advisory ")]
 
 
-def _concerns_issuer(case: ChangeAssuranceCase, impact: ImpactReport) -> bool:
+def _concerns_issuer(
+    case: ChangeAssuranceCase, advisory_id: str, issuer: str, advisory_hash: str = "",
+) -> bool:
     """Is ``case`` about this advisory's issuer (or this very document)?
+
+    Issuers are compared as :func:`fold_text` folds them (case, spacing) with invisible
+    characters removed, so one supplier's spellings are one issuer; ``ControlCo`` and
+    ``Control Co GmbH`` stay different, as they do everywhere else.
 
     A case that records no advisory link at all (it should not exist) is treated as the
     same lineage, so the ids and the folding of what is already in a ledger do not move.
@@ -173,32 +187,53 @@ def _concerns_issuer(case: ChangeAssuranceCase, impact: ImpactReport) -> bool:
     links = _advisory_links(case)
     if not links:
         return True
-    note = _advisory_link_note(impact)
-    return any(r.get("content_hash") == impact.advisory_hash
-               or r.get("note", "") in (note, f"{note} (unsigned CSAF import)")
+    note = fold_text(_advisory_link_note(advisory_id, issuer))
+    return any((advisory_hash and r.get("content_hash") == advisory_hash)
+               or fold_text(r.get("note", "")) in (note, f"{note} (unsigned csaf import)")
                for r in links)
+
+
+def _plain_advisory_identity(
+    store: CaseStore, advisory_id: str, issuer: str, advisory_hash: str = "",
+) -> tuple[str, str]:
+    """``(case id, trigger id)`` of a non-import advisory in this ledger.
+
+    It has always been keyed by its id alone, and those ids must not move. But an id does
+    not name a supplier: another supplier's advisory that reuses an id already held by a
+    case about someone else's advisory (closed, rejected, deferred or open) is a different
+    advisory and gets its own case, named by its issuer (folded, invisible characters
+    removed, so spellings of one issuer share it). Which of the two a report maps to is
+    fixed by the ledger (the case that holds the plain id is the one about its issuer), so
+    assessing either again finds the same case and duplicates nothing.
+    """
+    legacy = _case_id(TriggerType.SUPPLIER_ADVISORY, advisory_id)
+    holder = store.get(legacy)
+    if holder is None or _concerns_issuer(holder, advisory_id, issuer, advisory_hash):
+        return legacy, advisory_id
+    own = f"{advisory_id} [advisory from {fold_text(_clean_issuer(issuer))}]"
+    return _case_id(TriggerType.SUPPLIER_ADVISORY, own), own
 
 
 def _advisory_identity(store: CaseStore, impact: ImpactReport) -> tuple[str, str]:
     """``(case id, trigger id)`` for this advisory report in this ledger.
 
-    A non-import advisory has always been keyed by its id alone, and those ids must not
-    move. But an id does not name a supplier: a second supplier's advisory that reuses an id
-    already held by a case about someone else's advisory (closed, rejected, deferred or
-    open) is a different advisory and gets its own case, named by its issuer. Which of the
-    two a report maps to is fixed by the ledger (the case that holds the plain id is the one
-    about its issuer), so assessing either again finds the same case and duplicates nothing.
-    An import's trigger already names its publisher.
+    An import's trigger already names its trust class and publisher.
     """
     trigger = _advisory_trigger(impact)
-    legacy = _case_id(TriggerType.SUPPLIER_ADVISORY, trigger)
     if impact.advisory_import is not None:
-        return legacy, trigger
-    holder = store.get(legacy)
-    if holder is None or _concerns_issuer(holder, impact):
-        return legacy, trigger
-    own = f"{trigger} [advisory from {neutralise(impact.issued_by)}]"
-    return _case_id(TriggerType.SUPPLIER_ADVISORY, own), own
+        return _case_id(TriggerType.SUPPLIER_ADVISORY, trigger), trigger
+    return _plain_advisory_identity(store, impact.advisory_id, impact.issued_by,
+                                    impact.advisory_hash)
+
+
+def advisory_case_id_in(store: CaseStore, impact: ImpactReport) -> str:
+    """The id the case for this advisory report has in THIS ledger.
+
+    Unlike :func:`advisory_case_id` (the id from the advisory alone) it knows that another
+    supplier's advisory may already hold the plain id, so a report from a second issuer
+    that reuses the id maps to its own case (see :func:`_plain_advisory_identity`).
+    """
+    return _advisory_identity(store, impact)[0]
 
 
 def _name_problem(name: str) -> str:
@@ -526,6 +561,19 @@ def _recurrence(
         if extra:
             return ("the advisory now reaches machine(s) the "
                     f"{settled.status.value} case did not name: " + ", ".join(extra))
+        # A machine the assessment now cannot include or exclude, which the settled case
+        # never named or asked about, is an open question nobody has answered. Only for a
+        # case that records the advisory it was opened on (one sealed with unknown machines
+        # in view): an older settled case was never asked, and re-opening every one of them
+        # on the next look would bury the queue; re-assess it by hand to ask.
+        if settled.advisory:
+            asked = {u.get("machine") for u in settled.unknown_machines} | set(settled.machines)
+            fresh_unknown = [str(u.get("machine")) for u in new.unknown_machines
+                             if u.get("machine") not in asked]
+            if fresh_unknown:
+                return (f"the advisory now leaves machine(s) unresolved that the "
+                        f"{settled.status.value} case never asked about: "
+                        + ", ".join(fresh_unknown))
         # The same supplier re-issued the id with different content: the person who settled
         # the case did not decide on this document. (The SAME document, assessed again, is
         # not a recurrence. An import is skipped: its text churns without the substance.)
@@ -1028,8 +1076,7 @@ def assess_advisory(
         },
         previous_verifications=tuple(previous),
         linked_evidence=({"relation": "concerns", "content_hash": impact.advisory_hash,
-                          "note": f"advisory {neutralise(impact.advisory_id)} from "
-                                  f"{neutralise(impact.issued_by)}"
+                          "note": _advisory_link_note(impact.advisory_id, impact.issued_by)
                                   + (" (unsigned CSAF import)" if imported else "")},),
         checks_skipped=(
             impact.checks_skipped if not marker else (
@@ -1058,9 +1105,13 @@ def assess_advisory(
 
 
 def note_advisory_withdrawn(
-    store: CaseStore, advisory_id: str, reason: str, *, actor: Actor,
+    store: CaseStore, advisory_id: str, reason: str, *, actor: Actor, issuer: str = "",
 ) -> ChangeAssuranceCase | None:
     """The supplier retracted an advisory this fleet had a case for.
+
+    ``issuer`` names who withdrew it. An advisory id does not name a supplier, so with a
+    reused id the case is the one about THAT issuer (see :func:`_plain_advisory_identity`);
+    without it the case that holds the plain id is used, as it always was.
 
     Whatever was done because of it now rests on a retracted advisory, and only
     a person can say whether that matters. So the withdrawal becomes a human
@@ -1068,7 +1119,9 @@ def note_advisory_withdrawn(
     A case already settled is left alone; no case at all returns ``None``.
     """
     def step() -> ChangeAssuranceCase | None:
-        case = store.get(_case_id(TriggerType.SUPPLIER_ADVISORY, advisory_id))
+        cid = (_plain_advisory_identity(store, advisory_id, issuer)[0] if issuer
+               else _case_id(TriggerType.SUPPLIER_ADVISORY, advisory_id))
+        case = store.get(cid)
         if case is None or case.status.is_settled:
             return case
         question = (f"The supplier withdrew {advisory_id}: {reason or 'no reason given'}. "

@@ -281,7 +281,7 @@ class TestAReusedAdvisoryIdIsNotTheClosedCase:
         assert second.machines == ("Grimaldi/AR-7#0412",)
         assert store.get(first.case_id).status is CaseStatus.CLOSED   # untouched
         assert [c.case_id for c in store.list() if c.is_open] == [second.case_id]
-        assert "ScanCo" in second.trigger_id
+        assert "scanco" in second.trigger_id      # the issuer, folded
         assert reconstruct_case(ledger, second.case_id).ok
         assert reconstruct_case(ledger, first.case_id).ok
 
@@ -461,3 +461,107 @@ class TestTheArt14IntakeNeedsARealPersonToBeSealedAsOne:
     def test_a_named_person_is_recorded(self, tmp_path, capsys):
         code, size, out = self._run(tmp_path, "a.integrator", capsys)
         assert code == 0 and size > 1 and "opened" in out.out
+
+
+# =====================================================================
+# review follow-ups: a new unknown machine, withdrawal by issuer, issuer spellings
+# =====================================================================
+
+class TestANewUnknownMachineReopensASettledCase:
+    def test_a_settled_case_is_reopened_with_a_question_when_a_machine_becomes_unknown(
+            self, ledger, store):
+        record_manifest(ledger, manifest("0412", fw()))
+        first = assess_advisory(store, impact_of(ledger, advisory()), actor=PERSON)
+        close_it(store, first.case_id)
+        unknown_only(ledger)                                   # 0804 is enrolled afterwards
+        again = assess_advisory(store, impact_of(ledger, advisory()), actor=BOT)
+        assert again.case_id == first.case_id
+        assert again.status is CaseStatus.OPEN                 # was: stayed [CLOSED]
+        assert "never asked about" in again.prior_closures[-1]["reopened_because"]
+        assert [u["machine"] for u in again.unknown_machines] == ["Grimaldi/AR-7#0804"]
+        assert any("0804" in q for q in again.human_decisions_required)
+
+    def test_the_same_unknown_machine_seen_again_does_not_reopen_it(self, ledger, store):
+        record_manifest(ledger, manifest("0412", fw()))
+        unknown_only(ledger)
+        first = assess_advisory(store, impact_of(ledger, advisory()), actor=PERSON)
+        close_it(store, first.case_id)
+        before = len(ledger)
+        again = assess_advisory(store, impact_of(ledger, advisory()), actor=BOT)
+        assert again.status is CaseStatus.CLOSED and len(ledger) == before
+
+
+class TestAWithdrawalReachesTheIssuersOwnCase:
+    def test_the_withdrawing_issuers_case_gets_the_question_not_the_other_suppliers(
+            self, ledger, store):
+        from assurance.change.service import note_advisory_withdrawn
+        cc, sc = two_suppliers_one_id(ledger)
+        a = assess_advisory(store, impact_of(ledger, cc), actor=PERSON)
+        b = assess_advisory(store, impact_of(ledger, sc), actor=PERSON)
+        got = note_advisory_withdrawn(store, "SA-1", "defect was in the test rig",
+                                      actor=BOT, issuer="ScanCo")
+        assert got.case_id == b.case_id
+        assert any("withdrew SA-1" in q for q in store.get(b.case_id).human_decisions_required)
+        assert not any("withdrew" in q for q in store.get(a.case_id).human_decisions_required)
+
+    def test_without_an_issuer_the_plain_id_case_is_used_as_before(self, ledger, store):
+        from assurance.change.service import note_advisory_withdrawn
+        cc, _ = two_suppliers_one_id(ledger)
+        a = assess_advisory(store, impact_of(ledger, cc), actor=PERSON)
+        got = note_advisory_withdrawn(store, "SA-1", "x", actor=BOT)
+        assert got.case_id == a.case_id
+
+    def test_an_issuer_with_no_case_under_a_reused_id_is_none(self, ledger, store):
+        from assurance.change.service import note_advisory_withdrawn
+        cc, _ = two_suppliers_one_id(ledger)
+        assess_advisory(store, impact_of(ledger, cc), actor=PERSON)
+        assert note_advisory_withdrawn(store, "SA-1", "x", actor=BOT, issuer="ScanCo") is None
+
+
+class TestOneIssuerOneCaseWhateverTheSpelling:
+    @pytest.mark.parametrize("spelling", ["scanco", "SCANCO", " ScanCo ", "Scan​Co"])
+    def test_case_spacing_and_invisible_characters_do_not_open_a_second_case(
+            self, ledger, store, spelling):
+        cc, sc = two_suppliers_one_id(ledger)
+        assess_advisory(store, impact_of(ledger, cc), actor=PERSON)
+        second = assess_advisory(store, impact_of(ledger, sc), actor=PERSON)
+        variant = replace(sc, issued_by=spelling)
+        again = assess_advisory(store, impact_of(ledger, variant), actor=PERSON)
+        assert again.case_id == second.case_id
+        assert len(store.list()) == 2
+
+    def test_a_different_legal_form_is_still_a_different_issuer(self, ledger, store):
+        cc, sc = two_suppliers_one_id(ledger)
+        assess_advisory(store, impact_of(ledger, cc), actor=PERSON)
+        assess_advisory(store, impact_of(ledger, sc), actor=PERSON)
+        other = assess_advisory(store, impact_of(ledger, replace(sc, issued_by="ScanCo GmbH")),
+                                actor=PERSON)
+        assert len(store.list()) == 3 and other.status is CaseStatus.OPEN
+
+
+class TestTheOtherCaseIdUsersAreIssuerAware:
+    def test_open_case_from_report_opens_the_second_suppliers_case_instead_of_refusing(
+            self, ledger, store):
+        from assurance.watch.open_case import open_case_from_report
+        cc, sc = two_suppliers_one_id(ledger)
+        first = assess_advisory(store, impact_of(ledger, cc), actor=PERSON)
+        close_it(store, first.case_id)
+        # before: "case ... already exists and is closed; that is a person's decision"
+        result = open_case_from_report(ledger, impact_of(ledger, sc), PERSON)
+        assert result.outcome == "opened" and result.case_id != first.case_id
+        assert result.status == "open"
+
+    def test_the_article_14_intake_id_follows_the_change_case(self, ledger, store):
+        from assurance.bridge.art14 import draft_from_advisory
+        from assurance.change.service import advisory_case_id_in
+        cc, sc = two_suppliers_one_id(ledger)
+        fleet = Fleet.from_ledger(ledger)
+        assess_advisory(store, impact_of(ledger, cc), actor=PERSON)
+        d1 = draft_from_advisory(
+            cc, impact_of(ledger, cc), fleet, received_by="a.integrator",
+            change_case_id=advisory_case_id_in(store, impact_of(ledger, cc)))
+        d2 = draft_from_advisory(
+            sc, impact_of(ledger, sc), fleet, received_by="a.integrator",
+            change_case_id=advisory_case_id_in(store, impact_of(ledger, sc)))
+        assert d1.case_id == "CASE-SA-1"                  # the id it always had
+        assert d2.case_id.startswith("CASE-SA-1-") and d2.case_id != d1.case_id
