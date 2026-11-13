@@ -143,7 +143,8 @@ def test_a_forged_role_is_not_sealed_verbatim(client, cell, tmp_path, name, driv
 
 #: The routes that are human decisions: bound to a decider operator's credential, so the
 #: server writes its own attribution into the role (and the caller's words stay words).
-_DECISIONS = {"cases/awareness", "cases/triage", "cases/filings"}
+_DECISIONS = {"cases/awareness", "cases/triage", "cases/filings", "cases/measure",
+              "cases/user-notification"}
 
 
 def test_every_art14_recording_route_seals_a_clean_role(client, cell, accounts, tmp_path):

@@ -153,6 +153,11 @@ DECISIONS = [
     ("POST", "/v1/supplier/trust/revoke", None),
     ("POST", "/v1/supplier/trust/override", None),
     ("POST", "/v1/supplier/trust/feed-baseline", None),
+    # a measure starts the 14-day legal clock; the user notice answers Art. 14(8): both bound like awareness
+    ("POST", "/v1/cases/{case_id}/measure",
+     {"available_at": "2026-09-19T09:00:00Z", "description": "w", "actor": {"identifier": "Maria Rossi"}}),
+    ("POST", "/v1/cases/{case_id}/user-notification",
+     {"at": "2026-09-19T09:30:00Z", "scope": "all", "content": "c", "actor": {"identifier": "Maria Rossi"}}),
     # approving an SBOM draft enrols a machine and decides which software is safety-relevant
     ("POST", "/v1/ingest/sbom/{draft_id}/review", {"decision": "approve", "reason": "r"}),
 ]
