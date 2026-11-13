@@ -41,10 +41,13 @@ resources:
     cpu: "1"
     memory: 1Gi
 
+# Single writer: autoscaling must stay off. Every replica is another writer on the hash-chained
+# SQLite ledger and account store, and the chain forks silently (docs/GO-LIVE.md "Deployment
+# topology"). tests/test_container_static.py pins enabled: false and maxReplicas: 1.
 autoscaling:
-  enabled: true
-  minReplicas: 3
-  maxReplicas: 20
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 1
   targetCPUUtilizationPercentage: 70
 
 postgresql:

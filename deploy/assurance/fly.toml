@@ -47,8 +47,12 @@ primary_region = "fra"          # Frankfurt: the data is EU manufacturers' regul
 [http_service]
   internal_port = 8080
   force_https = true
-  # SQLite on one volume means one writer. auto_stop would be fine; running two
-  # machines would not, and this is the config line that prevents it.
+  # SQLite on one volume means one writer. auto_stop would be fine; running two machines
+  # would not. These keys state the intent (tests/test_container_static.py pins them); they are
+  # NOT an enforcement the application can check. Whether Fly honours max_machines_running
+  # against a manual `fly scale count 2` or a machine clone has not been verified here, and a
+  # second machine would have its own volume and its own chain from genesis. Never scale this
+  # app above one machine (docs/GO-LIVE.md "Deployment topology").
   auto_stop_machines = false
   auto_start_machines = true
   min_machines_running = 1
