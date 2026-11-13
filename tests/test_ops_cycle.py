@@ -384,7 +384,7 @@ def test_an_anchor_landing_during_a_backup_does_not_make_the_backup_look_tampere
 
     def snapshot(src, dest):
         real_snapshot(src, dest)
-        if Path(src).parent.name == "tenants":
+        if Path(src).name == f"{site.accounts[0]}.db":     # the ledger the new record lands in
             land_an_anchor("ledger")
 
     def copytree(src, dest, *a, **k):
