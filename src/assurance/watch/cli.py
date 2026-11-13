@@ -44,7 +44,7 @@ from assurance.watch.advisories import feed_file_age
 from assurance.watch.config import WatchConfig
 from assurance.watch.freshness import assess_status_freshness
 from assurance.watch.intel_source import StoreAges, store_ages
-from assurance.watch.runner import last_run, run_watch
+from assurance.watch.runner import _require_verifying_chain, last_run, run_watch
 
 __all__ = ["build_parser", "main"]
 
@@ -185,10 +185,18 @@ def _cmd_run(args: argparse.Namespace) -> int:
         ledger = EvidenceLedger(args.ledger)
         run = run_watch(config, ledger, seal=True, now=args.now)
 
+    # The findings are printed whatever happens to --out: the run is already sealed, and a
+    # file that could not be written must not also swallow what the run found.
+    out_error = False
     if args.out:
-        Path(args.out).write_text(
-            json.dumps(run.to_dict(), indent=2, sort_keys=True) + "\n",
-            encoding="utf-8")
+        try:
+            Path(args.out).write_text(
+                json.dumps(run.to_dict(), indent=2, sort_keys=True) + "\n",
+                encoding="utf-8")
+        except OSError as exc:
+            out_error = True
+            print(f"error: --out was not written ({neutralise(exc)}). The run itself was "
+                  "recorded; its findings follow.", file=sys.stderr)
 
     if args.json:
         print(json.dumps(run.to_dict(), indent=2, sort_keys=True))
@@ -289,13 +297,14 @@ def _cmd_run(args: argparse.Namespace) -> int:
         if run.checks_skipped:
             print("\n  not checked:")
             for c in run.checks_skipped:
-                print(f"    - {c}")
-    return _exit_code(run.verdict)
+                print(f"    - {neutralise(c)}")
+    return 2 if out_error else _exit_code(run.verdict)
 
 
 def _cmd_status(args: argparse.Namespace) -> int:
     config = WatchConfig.from_json(args.config)
     ledger = EvidenceLedger.open_existing(args.ledger)
+    _require_verifying_chain(ledger, config)
     body = last_run(ledger, config.watch_id)
     if body is None:
         print(f"{config.watch_id}: this watch has never run against this ledger.",
@@ -339,18 +348,18 @@ def _cmd_status(args: argparse.Namespace) -> int:
     else:
         shown = "DEGRADED" if fresh.degraded else str(body.get("verdict", "")).upper()
         age = f" ({fresh.age_hours:.2f} h ago)" if fresh.age_hours is not None else ""
-        print(f"{config.watch_id} — last run {body.get('started_at')}{age} — {shown}")
+        print(neutralise(f"{config.watch_id} — last run {body.get('started_at')}{age} — {shown}"))
         if fresh.degraded:
             print(f"  stored verdict of that run: {stored_verdict.upper()} "
                   "(not current; see below)")
             for reason in fresh.reasons:
                 print(f"  !! {neutralise(reason)}")
         for o in body.get("outcomes", []):
-            print(f"  {o.get('status', ''):<14} {o.get('serial', '')}  "
-                  f"{o.get('detail', '')}")
+            print(neutralise(f"  {o.get('status', ''):<14} {o.get('serial', '')}  "
+                             f"{o.get('detail', '')}"))
         if body.get("stale_observations"):
-            print("  not looked at recently enough: "
-                  + ", ".join(body["stale_observations"]))
+            print(neutralise("  not looked at recently enough: "
+                             + ", ".join(body["stale_observations"])))
         for a in ages:
             _print_ages(a, clock)
         for sid, rec, problem in feed_ages:
