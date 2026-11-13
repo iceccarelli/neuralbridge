@@ -57,7 +57,7 @@ export const FALLBACK_PLANS: Plan[] = [
       '/ai control plane: discover the demo connection and run READ operations (list tables, describe a table, run a SELECT), up to 30 a day — writes need Register or Cell',
       'POST /v1/spec/validate — what is missing, what exceeds a character limit, which listed territories are not EU Member States',
       'GET /v1/spec/fields — the full field specification per track and stage',
-      'POST /v1/machine/separation — the ISO/TS 15066 protective separation distance for your cell, term by term, from your own stop figures. The figures are UNVERIFIED against ISO/TS 15066 and ISO 13855: this is arithmetic on the numbers you supply, not a risk assessment or a conformity statement',
+      'POST /v1/machine/separation — the protective separation distance for your cell, term by term, from your own stop figures. Arithmetic on the numbers you supply with an unverified formula; not a risk assessment and not a conformity statement',
       "POST /v1/machine/bundle/check — re-verify anybody's evidence bundle. Always free: a bundle only a paying customer can check is worth nothing",
       'POST /v1/machinery/diff — whether a machine still matches the configuration it was CE-marked with',
       'POST /v1/fleet/advisory/check — whether one supplier advisory affects one machine',

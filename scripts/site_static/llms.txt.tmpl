@@ -75,6 +75,7 @@ lists the plan as purchasable.
   - https://neuralbridge.io/product/supplier-advisory-fleet-impact
   - https://neuralbridge.io/product/cra-article-14
   - https://neuralbridge.io/product/machinery-regulation-evidence
+  - https://neuralbridge.io/product/machine-passport
   - https://neuralbridge.io/product/machine-safety-verification
   - https://neuralbridge.io/product/evidence-attestation
   - https://neuralbridge.io/product/offline-assurance-kit
@@ -143,7 +144,7 @@ generated from the entitlements enforced in
 `src/assurance/billing/plans.py`. If a capability is not gated in code, it
 is not sold — that is a hard invariant of this codebase.
 
-Auth is one header: `X-API-Key: <key>`. A missing key is a 401; a valid key
+Auth is one header: `X-API-Key: <key>`. On the /v1 assurance API a missing key is a 401 (the separate /ai control plane answers 402 to a keyless write); a valid key
 on the wrong plan is a 402 (never a 403) with a structured JSON body naming
 the required plan and the exact remedy — safe to parse and act on
 automatically. Fetch /openapi.json for the full, current route/schema list

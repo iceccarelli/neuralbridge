@@ -34,7 +34,7 @@
       "type": "api_key",
       "in": "header",
       "name": "X-API-Key",
-      "note": "A missing key is 401. A valid key on a plan that doesn't include the route is 402 (never 403), with a structured JSON body naming the required plan and the exact remedy — safe to parse and act on automatically."
+      "note": "On the /v1 assurance API a missing key is 401 (the separate /ai control plane answers 402 to a keyless write). A valid key on a plan that doesn't include the route is 402 (never 403), with a structured JSON body naming the required plan and the exact remedy — safe to parse and act on automatically."
     }
   },
   "pricing": {
