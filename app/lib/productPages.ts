@@ -853,7 +853,7 @@ export const PRODUCT_PAGES: ProductPage[] = [
         },
         {
           command: 'python -m assurance machinery passport --ledger ledger.db --actor v.demo manifest.json --no-seal',
-          output: 'DemoCo/AR-7#DEMO-0001 — COVERED\n  configuration 017256be1c63  manifest MAN-DEMO-1\n  [ok    ] SF-01 [PL d]  Protective separation in speed-and-separation monitoring\n…\n  [ok    ] SF-02 [PL d]  Speed limit in collaborative operation\n…\n  Interventions on safety-bearing items with nothing re-run: INT-DEMO-1\n  1 recorded intervention(s)\n  sealed as …',
+          output: 'DemoCo/AR-7#DEMO-0001 — COVERED\n  configuration 017256be1c63  manifest MAN-DEMO-1\n  [ok    ] SF-01 [PL d]  Protective separation in speed-and-separation monitoring\n…\n  [ok    ] SF-02 [PL d]  Speed limit in collaborative operation\n…\n  Interventions on safety-bearing items with nothing re-run: INT-DEMO-1\n  1 recorded intervention(s)\n  content hash … (not sealed)',
         },
         {
           command: 'python -m assurance machinery check passport.json',

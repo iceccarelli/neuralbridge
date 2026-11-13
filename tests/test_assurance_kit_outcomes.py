@@ -657,3 +657,80 @@ class TestDiagnosticsForHandEditedFiles:
         assert rc != 0
         assert phrase in out and path.name in out
         assert "codec" not in out and "Traceback" not in out
+
+
+# =====================================================================
+# An absent OPTIONAL item is complete-with-a-note; an absent required one is incomplete.
+# =====================================================================
+class TestOptionalItems:
+    def _plan_optional(self, tmp_path, item="ITM-FW", required=False):
+        path = tmp_path / "plans" / "cell.json"
+        body = json.loads(path.read_text())
+        next(i for i in body["items"] if i["item_id"] == item)["required"] = required
+        path.write_text(json.dumps(body))
+
+    def test_an_absent_optional_item_is_complete_and_listed_in_the_notes(self, tmp_path):
+        from assurance.collect.collector import collect
+        from assurance.collect.plan import CollectionPlan
+        from assurance.core.evidence import Actor
+        from assurance.machinery.manifest import manifest_is_incomplete
+
+        d = plan_dict()
+        d["items"][3]["required"] = False
+        root = write_export(tmp_path / "e", stamp="s", operator="o", seq="1")
+        (root / "controller-fw.bin").unlink()
+        r = collect(CollectionPlan.from_dict(d), root, serial="0412",
+                    taken_by=Actor(identifier="Jane Doe", role="x", kind="person"))
+        assert r.complete and r.missing == ()
+        assert [o.item_id for o in r.optional_absent] == ["ITM-FW"]
+        assert not manifest_is_incomplete(r.manifest)
+        assert "optional item(s) not present: ITM-FW" in r.manifest.notes
+
+    def test_an_absent_required_item_is_still_incomplete(self, tmp_path):
+        from assurance.collect.collector import collect
+        from assurance.collect.plan import CollectionPlan
+        from assurance.core.evidence import Actor
+        from assurance.machinery.manifest import manifest_is_incomplete
+
+        root = write_export(tmp_path / "e", stamp="s", operator="o", seq="1")
+        (root / "controller-fw.bin").unlink()
+        r = collect(CollectionPlan.from_dict(plan_dict()), root, serial="0412",
+                    taken_by=Actor(identifier="Jane Doe", role="x", kind="person"))
+        assert not r.complete and manifest_is_incomplete(r.manifest)
+
+    def test_an_optional_item_that_exists_but_cannot_be_read_is_incomplete(self, tmp_path):
+        from assurance.collect.collector import collect
+        from assurance.collect.plan import CollectionPlan
+        from assurance.core.evidence import Actor
+
+        d = plan_dict()
+        d["items"][0]["required"] = False
+        root = write_export(tmp_path / "e", stamp="s", operator="o", seq="1")
+        (root / "scanner-zones.cfg").write_bytes("zone=Müller\n".encode("latin-1"))
+        r = collect(CollectionPlan.from_dict(d), root, serial="0412",
+                    taken_by=Actor(identifier="Jane Doe", role="x", kind="person"))
+        assert not r.complete
+
+    def test_the_kit_records_a_machine_without_its_optional_item_and_says_so(
+            self, tmp_path, capsys):
+        kit = make_kit(tmp_path)
+        self._plan_optional(tmp_path)
+        (tmp_path / "exports" / "AR7-1001" / "controller-fw.bin").unlink()
+        capsys.readouterr()
+        assert run_cli("check", str(kit)) == 0
+        assert "optional" in capsys.readouterr().out
+        out = tmp_path / "out"
+        assert run_cli("run", str(kit), "--out", str(out)) == 0
+        text = capsys.readouterr().out
+        machine = run_record(out)["machines"][0]
+        assert machine["status"] == "recorded" and machine["sealed"] is True
+        assert machine["missing"] == [] and machine["optional_absent"] == ["ITM-FW"]
+        assert "optional item(s) not present: ITM-FW" in text
+        assert "ITM-FW" in (out / "report.html").read_text()
+
+    def test_the_kit_still_refuses_to_seal_a_machine_missing_a_required_item(self, tmp_path):
+        kit = make_kit(tmp_path)
+        self._plan_optional(tmp_path, item="ITM-PLC", required=False)
+        (tmp_path / "exports" / "AR7-1001" / "controller-fw.bin").unlink()   # required ITM-FW
+        assert run_cli("run", str(kit), "--out", str(tmp_path / "out")) == 2
+        assert MANIFEST_KIND not in ledger_kinds(tmp_path / "out")
