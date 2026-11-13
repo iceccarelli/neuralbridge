@@ -656,8 +656,10 @@ def hold_expectations(expect: dict, best: dict, links: dict, chain_len: int, f: 
     if expect["max_age"] is not None:
         signed = parse_time(best["attested_at"])
         age = None if signed is None else expect["now"] - signed
-        if age is None or age > expect["max_age"]:
+        if age is None or age > expect["max_age"] or age < -timedelta(minutes=5):
             how = ("its signing time is not a timestamp" if age is None else
+                   f"it was signed in the future ({-age.total_seconds() / 3600:.1f} h ahead of now), "
+                   "which no honest signer or clock produces" if age < -timedelta(minutes=5) else
                    f"it is {age.total_seconds() / 3600:.1f} h old, over the allowed "
                    f"{expect['max_age'].total_seconds() / 3600:g} h")
             out.append(f"the newest signed head ({seen}) is too old: {how}. Signing has stopped, or a newer "

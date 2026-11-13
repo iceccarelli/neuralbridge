@@ -110,6 +110,10 @@ FAILED = "failed"            # an anchor was checked and the bundle does not mat
 #: truncated to the second). A forger gains at most this much.
 ANCHOR_CLOCK_SKEW_SECONDS = 60
 
+#: How far ahead of the verifier's clock a signing time may be before it is a finding (the
+#: tolerance `ops` status uses): a head "signed" in the future defeats any age bound.
+FUTURE_TOLERANCE = timedelta(minutes=5)
+
 #: Problems listed in a result. A hostile file can make every one of millions of
 #: entries a finding; the answer must stay readable and small, so past this the
 #: rest are counted, not listed.
@@ -949,9 +953,11 @@ def _expectation_violations(
             age = moment - parse_utc(best.attested_at)
         except (ValueError, TypeError, OverflowError):
             age = None
-        if age is None or age > expect.max_age:
+        if age is None or age > expect.max_age or age < -FUTURE_TOLERANCE:
             how = ("its signing time is not a timestamp" if age is None else
-                   f"it is {age.total_seconds() / 3600:.1f} h old, over the allowed "
+                   f"it was signed in the future ({-age.total_seconds() / 3600:.1f} h ahead of "
+                   "now), which no honest signer or clock produces" if age < -FUTURE_TOLERANCE
+                   else f"it is {age.total_seconds() / 3600:.1f} h old, over the allowed "
                    f"{expect.max_age.total_seconds() / 3600:g} h")
             out.append(f"the newest signed head ({seen}) is too old: {how}. Signing has "
                        "stopped, or a newer anchor is being withheld.")

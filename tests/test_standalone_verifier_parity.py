@@ -246,3 +246,26 @@ class TestPreChangeArtefactsAreJudgedAsBefore:
 
     def test_without_the_key_nothing_is_a_bare_pass(self):
         assert standalone(str(FIXTURES / "v2.export.json"))[0] == 3
+
+
+def test_a_head_signed_in_the_future_fails_max_age_in_the_standalone_too(tmp_path, capsys):
+    from datetime import UTC, datetime
+
+    from assurance.attest import AttestationLog, SigningKey, attest
+    from assurance.evidence import EvidenceLedger
+
+    from .test_assurance_verifier_rollback import _ev
+
+    led = EvidenceLedger(tmp_path / "f.db")
+    for i in range(3):
+        led.append(_ev(i), subject="C")
+    key = SigningKey.generate()
+    record = attest(led, key, AttestationLog(tmp_path / "f.jsonl"),
+                    now=datetime(2099, 1, 1, tzinfo=UTC))
+    pub = tmp_path / "f.pub"
+    pub.write_text(key.verifying.pem(), encoding="utf-8")
+    bundle = tmp_path / "f.json"
+    bundle.write_text(json.dumps(led.export(anchor=record.to_dict())), encoding="utf-8")
+    assert standalone(str(bundle), "--public-key", str(pub))[0] == 0
+    code, out = standalone(str(bundle), "--public-key", str(pub), "--max-age", "1")
+    assert code == 1 and "signed in the future" in out, out

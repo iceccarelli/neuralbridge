@@ -267,3 +267,46 @@ class TestKeySubstitution:
         assert "are the ones you expected" in capsys.readouterr().out
         assert cli_main([*base, "--expect-fingerprint", "nonsense"]) == 2
         capsys.readouterr()
+
+
+class TestAHeadSignedInTheFuture:
+    """--max-age bounds how OLD a head is; a head 'signed' in 2099 is -632324 h old and passed."""
+
+    @pytest.fixture()
+    def future(self, tmp_path):
+        from datetime import UTC, datetime
+
+        led = EvidenceLedger(tmp_path / "f.db")
+        for i in range(3):
+            led.append(_ev(i), subject="C")
+        key = SigningKey.generate()
+        log = AttestationLog(tmp_path / "f.jsonl")
+        record = attest(led, key, log, now=datetime(2099, 1, 1, tzinfo=UTC))
+        pub = tmp_path / "f.pub"
+        pub.write_text(key.verifying.pem(), encoding="utf-8")
+        bundle = tmp_path / "f.json"
+        bundle.write_text(json.dumps(led.export(anchor=record.to_dict())), encoding="utf-8")
+        return {"bundle": str(bundle), "pub": str(pub), "log": str(log.path), "key": key}
+
+    def test_evidence_verify_calls_it_a_finding(self, future, capsys):
+        base = ["evidence", "verify", future["bundle"], "--public-key", future["pub"]]
+        assert cli_main(base) == 0                                # no bound asked: as before
+        capsys.readouterr()
+        assert cli_main([*base, "--max-age", "1"]) == 1
+        assert "signed in the future" in capsys.readouterr().out
+
+    def test_attest_verify_calls_it_a_finding(self, future, capsys):
+        base = ["attest", "verify", "--log", future["log"], "--public-key", future["pub"]]
+        assert cli_main(base) == 0
+        capsys.readouterr()
+        assert cli_main([*base, "--max-age", "1"]) == 1
+        assert "signed in the future" in capsys.readouterr().out
+
+    def test_a_few_minutes_of_clock_skew_is_tolerated(self, history):
+        signed = parse_utc(history.first.attested_at)
+        r = verify_export(history.rolled_back, trusted_key=history.key.verifying,
+                          max_age=timedelta(hours=24), now=signed - timedelta(minutes=4))
+        assert r.ok
+        r = verify_export(history.rolled_back, trusted_key=history.key.verifying,
+                          max_age=timedelta(hours=24), now=signed - timedelta(minutes=6))
+        assert not r.ok and any("in the future" in p for p in r.problems)

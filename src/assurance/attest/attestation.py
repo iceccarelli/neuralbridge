@@ -932,7 +932,12 @@ def _expectation_problems(
         else:
             moment = now if now is not None else utc_now()
             age = moment - parse_utc(newest.attested_at)
-            if age > max_age:
+            if age < -timedelta(minutes=5):
+                problems.append(
+                    f"the newest attestation ({newest.sequence}, {newest.attested_at}) was "
+                    f"signed in the future ({-age.total_seconds() / 3600:.1f} h ahead of now): "
+                    "no honest signer or clock produces that, and it would pass any age bound")
+            elif age > max_age:
                 problems.append(
                     f"the newest attestation ({newest.sequence}, {newest.attested_at}) is "
                     f"{age.total_seconds() / 3600:.1f} h old, over the allowed "
