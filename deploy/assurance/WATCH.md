@@ -2,8 +2,7 @@
 
 Everything else here is invoked by somebody who already suspects something. This
 is the component that finds a change on the day it happened rather than the day
-somebody remembered to look — and it is what makes €1,290/month a subscription
-rather than a tool licence.
+somebody remembered to look.
 
 ```bash
 assurance watch run watch.json --ledger register.db

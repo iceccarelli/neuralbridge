@@ -80,7 +80,7 @@ python -m assurance machine recorder-trust --trust recorder-trust.json \
 - Put the file where the server can read it, e.g. on the volume, and point the variable at it:
 
 ```bash
-# fly.toml [env]   (a deployment change: founder approval)
+# fly.toml [env]   (a deployment change: the deployment owner approves it first)
 ASSURANCE_RECORDER_TRUST = "/data/recorder-trust.json"
 ```
 
@@ -139,7 +139,7 @@ python examples/workflow/run.py
   by a route independent of the attestations.
 - Do not describe a result as "validated" to a buyer without saying under whose trust list.
 
-## Go-live checklist (founder; nothing here has been done)
+## Go-live checklist (for the deployment owner; nothing here has been done)
 
 Do these in order, on your own machine, and tick them yourself. None of them has been performed by the
 assistant or by CI; the repository can only show the software behaves as documented.
@@ -155,7 +155,7 @@ assistant or by CI; the repository can only show the software behaves as documen
       (`no_attestation_key_configured`). That is today's honest state.
 - [ ] After the change: the same request answers 200 and its `fingerprint` equals the one you wrote down in step 2.
       If it does not, stop; do not tell any customer that anything is counter-signed.
-- [ ] Revoke any token that was ever pasted into a chat (`DEPLOY_NOW.md`).
+- [ ] Revoke any token that was ever pasted into a chat.
 
 **Recorder trust (`ASSURANCE_RECORDER_TRUST`)** — only when a real recorder operator exists
 
@@ -174,5 +174,5 @@ first block does not change any tier; it adds a counter-signature to ledger head
 ## Authority
 
 Setting `ASSURANCE_ATTEST_KEY_PEM` and `ASSURANCE_RECORDER_TRUST` on a production deployment is a
-production-secret and deployment change. It needs the founder's explicit go-ahead
-(`CLAUDE.md`, "Authority"); this file is the checklist, not the action.
+production-secret and deployment change. It needs the deployment owner's explicit go-ahead;
+this file is the checklist, not the action.

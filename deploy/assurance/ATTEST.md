@@ -165,7 +165,7 @@ hosted routes receive what you send them). The customer computes their own head 
 which requires trusting nobody — and sends three numbers:
 
 ```bash
-curl -sS https://assurance-register.fly.dev/v1/ledger/attest \
+curl -sS https://<your-deployment>/v1/ledger/attest \
   -H "X-API-Key: $ASSURANCE_KEY" \
   -H 'content-type: application/json' \
   -d '{"ledger_length": 412,
@@ -240,7 +240,7 @@ assurance; the signed values are the three numbers.
 ### Verification is free and always will be
 
 ```bash
-curl -sS https://assurance-register.fly.dev/v1/ledger/attest/verify \
+curl -sS https://<your-deployment>/v1/ledger/attest/verify \
   -H 'content-type: application/json' \
   -d '{"attestations": [ ... ]}'
 ```

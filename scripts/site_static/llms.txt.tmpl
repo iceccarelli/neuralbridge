@@ -44,11 +44,12 @@ either.
 ## Honesty note for agents
 
 Checkout (Buy → Stripe → success page) and the live plans API are real code
-paths, but they only activate once the founder finishes deploying the
-hosted API (Fly.io) and setting `NEXT_PUBLIC_ASSURANCE_API_URL`. Until then
-this site correctly shows its offline/fallback state — that is by design,
-not a bug. Do not report Register/Cell purchase as available unless you
-have independently confirmed the live API responds.
+paths, but the hosted API is not deployed to a public endpoint: there is no
+public API instance, and neuralbridge.io serves the website only (its /v1/*
+paths are not an API). This site correctly shows its offline/fallback state —
+that is by design, not a bug. Do not report Register/Cell purchase as
+available unless you have independently confirmed that a live API responds and
+lists the plan as purchasable.
 
 ## Key URLs
 
@@ -74,6 +75,7 @@ have independently confirmed the live API responds.
   - https://neuralbridge.io/product/supplier-advisory-fleet-impact
   - https://neuralbridge.io/product/cra-article-14
   - https://neuralbridge.io/product/machinery-regulation-evidence
+  - https://neuralbridge.io/product/machine-passport
   - https://neuralbridge.io/product/machine-safety-verification
   - https://neuralbridge.io/product/evidence-attestation
   - https://neuralbridge.io/product/offline-assurance-kit
@@ -81,6 +83,12 @@ have independently confirmed the live API responds.
   - https://neuralbridge.io/product/enterprise-integration
 - Documentation: https://neuralbridge.io/docs (renders the product's docs/
   and deploy/assurance/ markdown on-site)
+- Assurance engine guides (one per engine, each states what it does not establish):
+  https://neuralbridge.io/docs/assurance, then /docs/assurance/ followed by one of
+  collect, machine, machinery, fleet, ingest, change, intel, watch, attest, key-ceremony,
+  trust-runbook, kit, supplier, bridge, pipeline
+- Check an evidence file you were handed (needs a deployed API; none is public today, so
+  run the same verifier locally): https://neuralbridge.io/verify
 - Developers / API reference: https://neuralbridge.io/developers
 - Applications (by capability, each mapped to a real gated route):
   https://neuralbridge.io/applications
@@ -136,7 +144,7 @@ generated from the entitlements enforced in
 `src/assurance/billing/plans.py`. If a capability is not gated in code, it
 is not sold — that is a hard invariant of this codebase.
 
-Auth is one header: `X-API-Key: <key>`. A missing key is a 401; a valid key
+Auth is one header: `X-API-Key: <key>`. On the /v1 assurance API a missing key is a 401 (the separate /ai control plane answers 402 to a keyless write); a valid key
 on the wrong plan is a 402 (never a 403) with a structured JSON body naming
 the required plan and the exact remedy — safe to parse and act on
 automatically. Fetch /openapi.json for the full, current route/schema list

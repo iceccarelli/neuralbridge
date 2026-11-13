@@ -74,8 +74,8 @@ ASCII digits), `seq` a positive integer, `source` one of `kev|nvd|epss|csaf`; ot
 
 ## Configuring a deployment
 
-Set `ASSURANCE_INTEL_STORE` to the store file (a persistent volume path on Fly). Nothing in this
-repository sets it in production; doing so is the founder's deployment step. Refresh the store
+Set `ASSURANCE_INTEL_STORE` to the store file (a persistent volume path on your host). Nothing in this
+repository sets it in production; doing so is the deployment owner's step. Refresh the store
 with the CLI on the operator's side and ship/mount the file; the API sees new observations on
 the next request.
 

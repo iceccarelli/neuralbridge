@@ -131,6 +131,18 @@ export default async function ProductPage({ params }: { params: ProductParams })
                   </li>
                 ))}
               </ol>
+              {page.example && (
+                <figure className="product-example" aria-labelledby="example-h">
+                  <figcaption id="example-h">
+                    <strong>{page.example.title}</strong> {page.example.note}
+                  </figcaption>
+                  {page.example.steps.map((step) => (
+                    <pre className="code-panel" key={step.command}>
+                      {`$ ${step.command}${step.output ? `\n${step.output}` : ''}`}
+                    </pre>
+                  ))}
+                </figure>
+              )}
             </section>
 
             <section id="what-you-get" aria-labelledby="get-h">

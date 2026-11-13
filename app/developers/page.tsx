@@ -72,9 +72,11 @@ export default function DevelopersPage() {
             <span className="eyebrow">Auth</span>
             <h2>One header. Bearer token, never a cookie.</h2>
             <p>
-              Send <code>X-API-Key: &lt;your key&gt;</code>. Get a key from <code>POST /v1/checkout</code> (Register
-              or Cell) or by running the service locally with{' '}
-              <code>ASSURANCE_ALLOW_UNAUTHENTICATED=1</code> for evaluation. A missing key is a 401. A valid key on
+              Send <code>X-API-Key: &lt;your key&gt;</code>. A key is issued by whoever operates the API you call:
+              <code>POST /v1/checkout</code> issues a Register or Cell key only on a deployment with Stripe prices
+              configured (none is public today; see <a href="/start#account">Get started</a>). To evaluate, run the
+              service locally with{' '}
+              <code>ASSURANCE_ALLOW_UNAUTHENTICATED=1</code>. A missing key is a 401. A valid key on
               the wrong plan is a <strong>402</strong>, never a 403 — the obstacle is payment, not permission, and
               every gated route says exactly which plan unlocks it.
             </p>

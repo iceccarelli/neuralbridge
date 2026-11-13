@@ -30,8 +30,8 @@ const PRODUCTS_PANES: Record<ProductsPane, { label: string; cards: { name: strin
     label: 'Plans',
     cards: [
       { name: 'Validator — free', blurb: 'Article 14 draft validation, calculators, offline kit.', href: '/#pricing' },
-      { name: 'Register — €390/mo', blurb: 'The Article 14 register for one manufacturer.', href: '/#pricing' },
-      { name: 'Cell — €1,290/mo', blurb: 'Register, plus machine and fleet-level assurance.', href: '/#pricing' },
+      { name: 'Register — €390/mo', blurb: 'The Article 14 register for one manufacturer. Unvalidated list price.', href: '/#pricing' },
+      { name: 'Cell — €1,290/mo', blurb: 'Register, plus machine and fleet-level assurance. Unvalidated list price.', href: '/#pricing' },
     ],
   },
   engines: {
@@ -363,7 +363,7 @@ export default function Header({
             <div className="shell finder-inner">
               <a className="finder-item" href={DOCS} onClick={closeAll}>
                 <strong>Documentation</strong>
-                <span>The full docs site — getting started, every engine, deploying.</span>
+                <span>The full docs site — getting started, every engine, the key ceremony and trust runbook.</span>
               </a>
               <a className="finder-item" href="/developers" onClick={closeAll}>
                 <strong>Developers</strong>
@@ -484,8 +484,8 @@ export default function Header({
           {mobileView === 'products' && (
             <>
               <a className="mobile-drill-item" href="/#pricing" onClick={() => setMobileOpen(false)}>Validator — free</a>
-              <a className="mobile-drill-item" href="/#pricing" onClick={() => setMobileOpen(false)}>Register — €390/mo</a>
-              <a className="mobile-drill-item" href="/#pricing" onClick={() => setMobileOpen(false)}>Cell — €1,290/mo</a>
+              <a className="mobile-drill-item" href="/#pricing" onClick={() => setMobileOpen(false)}>Register — €390/mo (list price)</a>
+              <a className="mobile-drill-item" href="/#pricing" onClick={() => setMobileOpen(false)}>Cell — €1,290/mo (list price)</a>
               <a className="mobile-drill-item" href="/#products" onClick={() => setMobileOpen(false)}>All engines</a>
               <a className="mobile-drill-item" href="/#platform" onClick={() => setMobileOpen(false)}>Platform</a>
               {productLinks.map((p) => (

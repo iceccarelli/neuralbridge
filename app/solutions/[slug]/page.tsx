@@ -19,7 +19,7 @@ export async function generateMetadata({ params }: { params: SolutionParams }): 
   if (!solution) return {};
   // The page's own headline and lead, cut at a word boundary: no separate marketing sentence to drift.
   return buildMetadata({
-    title: solution.role,
+    title: solution.metaTitle,
     description: fitDescription(`${solution.headline} ${solution.lead}`),
     path: `/solutions/${solution.slug}`,
     ownImage: true,

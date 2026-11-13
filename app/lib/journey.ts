@@ -66,7 +66,7 @@ export function journeySteps(): JourneyStep[] {
       short:
         'A worked synthetic report in a second, then a check of any evidence file you were handed. Both run on your own machine, with no account and no upload.',
       detail: [
-        'Real: the offline commands run the actual engines, need no account, no key and no network, and open no socket. The worked report uses synthetic machines and says so. The evidence checks read a file you name and say which facts it establishes and which it cannot.',
+        'Real: the offline commands run the actual engines, need no account, no key and no network; the kit’s guard refuses and records any network or process attempt it can see. The worked report uses synthetic machines and says so. The evidence checks read a file you name and say which facts it establishes and which it cannot.',
         HOSTED_API
           ? 'The same checks are also answered by the hosted API this site is connected to, within the daily allowances stated on the pricing section.'
           : 'Not available: the browser versions of these checks (the playgrounds on the home page and the /verify page) need a hosted API. None is deployed to a public endpoint, so those pages show the request they would send and say so. The commands below do the same work locally.',

@@ -2,7 +2,7 @@
 
 Status: **prepared, not performed.** No production key exists, no deployment has either
 variable, and nothing in this file has been done by the assistant or by CI. This is the
-procedure the founder approves; the actions are the founder's (`CLAUDE.md`, "Authority").
+procedure the deployment owner approves; the actions are the owner's, and nothing here is done for them.
 `TRUST-RUNBOOK.md` explains what the two variables are; this file is the *workflow* and the
 *evidence you keep*.
 
@@ -80,7 +80,8 @@ python -m assurance attest keygen --out ./ceremony/attest-service.pem \
 ## 3. Put the key where it belongs, then remove the local copy
 
 1. Store it: `fly secrets set ASSURANCE_ATTEST_KEY_PEM="$(cat ./ceremony/attest-service.pem)"`
-   (a deployment change: founder approval). The command above puts the key in your shell's
+   (Fly shown; use your platform's secrets manager otherwise. A deployment change: the deployment
+   owner approves it first.) The command above puts the key in your shell's
    process arguments for an instant; prefer your platform's stdin or file form where it has one.
 2. **Backup.** Put an encrypted copy (`gpg --symmetric` or your password manager's secure
    note) where you will find it in a year. Lose the key and you can no longer extend the chain of
@@ -245,8 +246,8 @@ May say, once a trust list with a real recorder is configured:
 
 Must not say:
 
-- that any customer, pilot, deployment or production use exists, unless it is sourced to a
-  named, dated document (`docs/pmf/pilot-ledger.csv` is the gate for customer and pilot claims);
+- that any customer, deployment or production use exists, unless it is sourced to a
+  named, dated document;
 - "tamper-proof", "certified", "notarised", or that the ledger contents are *true* or
   complete. The key holder and the database holder can still lie to a customer who keeps no copy;
 - that a recording is physically true, that a recorder was attached to the right machine or
@@ -255,7 +256,7 @@ Must not say:
 - anything about key custody stronger than the option you actually chose in section 1;
 - that the fingerprint is "verified by us" if the only publication route is the API itself.
 
-## 9. Decision record the founder keeps (not in this repository)
+## 9. Decision record the deployment owner keeps (not in this repository)
 
 | item | value |
 |---|---|
@@ -275,7 +276,7 @@ Must not say:
 - Do not reuse a staging or rehearsal key in production, or the synthetic demo recorder
   (`examples/workflow/run.py`) against a production trust list.
 - Do not trust a key because it arrived with the attestation it signs.
-- Do not set the variables, deploy, or charge anyone without the founder's explicit approval.
+- Do not set the variables, deploy, or charge anyone without the deployment owner's explicit approval.
 
 ## 11. Keep hosted ledgers anchored (a timer, run by the operator)
 

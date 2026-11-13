@@ -52,7 +52,7 @@ const APPLICATIONS: Application[] = [
     slug: 'fleet',
     name: 'Fleet advisory (OEM, multi-site)',
     imageKey: 'card-engine-fleet',
-    summary: 'One supplier advisory fanned out across every enrolled serial, matched by hash — never version-range arithmetic, never flattened into a boolean.',
+    summary: 'One supplier advisory fanned out across every enrolled serial, matched by hash, then version, then name. `fleet advisory` does no version-range arithmetic and never flattens a result into a boolean; the CSAF import reads dotted-decimal ranges only and says unknown otherwise.',
     routes: [
       { method: 'POST', path: '/v1/fleet/advisory' },
       { method: 'GET', path: '/v1/fleet/machines' },

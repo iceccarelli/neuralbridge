@@ -18,8 +18,8 @@ export interface SearchEntry {
 // from the /docs sidebar itself.
 export const SEARCH_INDEX: SearchEntry[] = [
   { title: 'Validator — free', group: 'Products', href: '/#pricing', blurb: 'Article 14 draft validation, calculators, offline kit.' },
-  { title: 'Article 14 Register — €390/mo', group: 'Products', href: '/#pricing', blurb: 'The CRA register for one manufacturer.' },
-  { title: 'Cell — €1,290/mo', group: 'Products', href: '/#pricing', blurb: 'Register, plus machine and fleet-level assurance.' },
+  { title: 'Article 14 Register — €390/mo', group: 'Products', href: '/#pricing', blurb: 'The CRA register for one manufacturer. Unvalidated list price.' },
+  { title: 'Cell — €1,290/mo', group: 'Products', href: '/#pricing', blurb: 'Register, plus machine and fleet-level assurance. Unvalidated list price.' },
   { title: 'Machine safety verification', group: 'Products', href: `/docs/assurance/machine`, blurb: 'ISO/TS 15066 checks against a declared safety envelope.' },
   { title: 'Machinery Annex III', group: 'Products', href: `/docs/assurance/machinery`, blurb: 'The safety software manifest and the staleness join.' },
   { title: 'Fleet advisory', group: 'Products', href: `/docs/assurance/fleet`, blurb: 'One advisory, fanned out by hash across a fleet.' },
@@ -42,7 +42,7 @@ export const SEARCH_INDEX: SearchEntry[] = [
   { title: 'Get started', group: 'Docs', href: '/start', blurb: 'From reading to your first enrolled machine, with what runs offline, what needs a hosted API and what is by request.' },
   { title: 'Services', group: 'Docs', href: '/services', blurb: 'Eight productised outcomes with inputs, deliverables, exclusions, evidence produced and what needs review. No capacity or price offered.' },
   { title: 'Trust and data handling', group: 'Docs', href: '/trust', blurb: 'Where data lives, provenance classes, what a record can prove, permissions and limitations.' },
-  { title: 'Documentation', group: 'Docs', href: DOCS, blurb: 'Getting started, every engine, deploying the register.' },
+  { title: 'Documentation', group: 'Docs', href: DOCS, blurb: 'Getting started, every engine, the key ceremony and trust runbook.' },
   { title: 'Getting started', group: 'Docs', href: '/docs/getting-started', blurb: 'The offline kit walkthrough, one command at a time.' },
   { title: 'Pricing (docs)', group: 'Docs', href: '/docs/pricing', blurb: 'The capability table and prices as written in docs/pricing.md; GET /v1/plans is the enforced version.' },
   { title: 'Capabilities by surface', group: 'Docs', href: '/docs/capabilities', blurb: 'Every capability and whether the CLI, HTTP API and MCP offer it, generated from the code; a missing surface is by design or planned.' },

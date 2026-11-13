@@ -103,7 +103,7 @@ const NEXT_ACTION_LABEL: Record<string, string> = {
   enroll_machine: 'Enroll this machine to unlock evidence-staleness checks and the fleet fan-out.',
   verify_machine: 'Run machine safety verification to close this gap.',
   generate_report: 'Generate the fleet report for this finding.',
-  contact_sales: 'This needs a human to look — talk to sales.',
+  contact_sales: 'This needs a human to look — review this with your safety engineer.',
   provide_more_evidence: 'Declare the missing checks or hashes and re-run the check.',
   none: 'Nothing further to buy for this result.',
 };
@@ -119,7 +119,12 @@ const NEXT_ACTION_CTA: Record<string, string> = {
   enroll_machine: 'Go to Investigate',
   verify_machine: 'Go to Investigate',
   generate_report: 'Go to Investigate',
-  contact_sales: 'Contact sales',
+  contact_sales: 'Ask about this result',
+};
+
+// The service names this action `contact_sales`; the page says what it means for the reader.
+const NEXT_ACTION_NAME: Record<string, string> = {
+  contact_sales: 'review with your safety engineer',
 };
 
 const VERDICT_LABEL: Record<Verdict, string> = {
@@ -196,6 +201,11 @@ export default function AdvisoryCheckPlayground() {
           <label htmlFor="advisory-json" className="playground-label">
             POST /v1/check/machine — edit the advisory or the manifest
           </label>
+          <p className="playground-placeholder" style={{ margin: '0 0 0.5rem' }}>
+            <strong>Sample data (synthetic):</strong> the advisory, supplier, machine and hashes below are invented for
+            this example (the supplier&apos;s reference URL is an example.com address). They describe no real product,
+            machine or customer.
+          </p>
           <textarea
             id="advisory-json"
             className="playground-textarea"
@@ -249,7 +259,9 @@ export default function AdvisoryCheckPlayground() {
               )}
 
               <div className="ai-card" style={{ marginTop: '0.75rem' }}>
-                <span className="status-pill register">Next: {result.commercial_next_action.action.replace(/_/g, ' ')}</span>
+                <span className="status-pill register">
+                  Next: {NEXT_ACTION_NAME[result.commercial_next_action.action] ?? result.commercial_next_action.action.replace(/_/g, ' ')}
+                </span>
                 <p style={{ fontSize: '0.85rem' }}>
                   {NEXT_ACTION_LABEL[result.commercial_next_action.action] ?? 'See pricing for what unlocks this.'}
                   {result.commercial_next_action.endpoint && (

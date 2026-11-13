@@ -107,9 +107,10 @@ export default function PrivacyPage() {
 
           <h2>The offline enrolment kit</h2>
           <p>
-            Runs entirely on your machine, writes only to disk you control, and arms a guard that refuses every
-            outbound network connection — including DNS lookups — for the duration of the run. This is not a
-            policy; it is checkable in <a href="/docs/assurance/kit">the kit's own docs</a>.
+            Runs entirely on your machine, writes only to disk you control, and arms a guard that refuses and records any
+            outbound network connection it can see — including DNS lookups — for the duration of the run. The guard
+            watches from inside the process, so for an operating-system-enforced boundary run the kit in a network
+            namespace; its limits are listed in <a href="/docs/assurance/kit">the kit's own docs</a>.
           </p>
 
           <h2>The paid Register / Cell tiers</h2>

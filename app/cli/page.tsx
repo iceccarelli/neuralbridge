@@ -8,7 +8,7 @@ import ImageryNote from '../components/ImageryNote';
 import { COUNTS } from '../lib/siteCapabilities';
 
 export const metadata: Metadata = buildMetadata({
-  title: 'CLI',
+  title: 'Assurance CLI: the real command tree',
   description:
     'Install the assurance CLI, the real domain/verb tree checked against --help, and which commands map to the hosted API vs. stay offline.',
   path: '/cli',

@@ -28,6 +28,16 @@ export interface ProductDocLink {
   href: string;
 }
 
+/** A worked example: real commands and the lines they print, on synthetic data.
+ * tests/test_site_product_pages.py runs the commands and fails if a line shown is not in their output;
+ * a line that is only "…" marks lines left out, and "…" inside a line stands for text that changes per run. */
+export interface ProductExample {
+  title: string;
+  /** Says the data is synthetic and how the output was produced. No code spans. */
+  note: string;
+  steps: { command: string; output: string }[];
+}
+
 export interface ProductPage {
   slug: string;
   /** Short name for menus and breadcrumbs. */
@@ -54,6 +64,8 @@ export interface ProductPage {
   related: string[];
   docs: ProductDocLink[];
   faq: ProductFaq[];
+  /** Optional worked example, shown under "How it works here". */
+  example?: ProductExample;
 }
 
 /** Snake_case words that may appear in backticks although they are not MCP tool names. */
@@ -68,6 +80,8 @@ export const VOCABULARY = [
   'not_demonstrable',
   'ready_to_close',
   'covered_at_community',
+  'ledger_chain_not_verified',
+  'no_functions_declared',
   'no_attestation_key_configured',
   'actor_mismatch',
   'operator_required',
@@ -181,6 +195,7 @@ export const PRODUCT_PAGES: ProductPage[] = [
       'supplier-advisory-fleet-impact',
       'cra-article-14',
       'machinery-regulation-evidence',
+      'machine-passport',
       'machine-safety-verification',
       'evidence-attestation',
       'offline-assurance-kit',
@@ -322,9 +337,9 @@ export const PRODUCT_PAGES: ProductPage[] = [
     kicker: 'Operating cycle',
     h1: 'Continuous machine assurance: from enrolment to a passport that can go stale',
     definition:
-      'Continuous machine assurance is the repeated cycle of enrolling a machine, recording what it runs, verifying it, noticing change and re-verifying, with each step written to a ledger and each judgement left to a named person.',
+      'Continuous machine assurance is the repeated cycle of enrolling a machine, recording what it runs, verifying it, noticing configuration drift and re-verifying, with each step written to a ledger and each judgement left to a named person.',
     problem: [
-      'A one-off assessment decays. The repository’s watch guide describes the dull reality: a firmware update tomorrow strands every sign-off in the ledger, and nothing says so until someone runs the comparison again. A job that quietly stops looks identical to a quiet week.',
+      'A one-off assessment decays as configuration drift accumulates. The repository’s watch guide describes the dull reality: a firmware update tomorrow strands every sign-off in the ledger, and nothing says so until someone runs the comparison again. A job that quietly stops looks identical to a quiet week.',
       'So the cycle has two jobs. It must notice change on a schedule, and it must make a failure to look distinguishable from nothing having moved. The watch command uses three exit codes for this: 0 quiet, 1 something for a person to read, 2 it could not rely on its inputs.',
     ],
     workflow: [
@@ -399,7 +414,7 @@ export const PRODUCT_PAGES: ProductPage[] = [
       'machinery.passport',
       'ops.cycle',
     ],
-    related: ['machine-evidence-ledger', 'machine-safety-verification', 'machinery-regulation-evidence', 'supplier-advisory-fleet-impact'],
+    related: ['machine-evidence-ledger', 'machine-safety-verification', 'machinery-regulation-evidence', 'supplier-advisory-fleet-impact', 'machine-passport'],
     docs: [
       { label: 'Operator pipeline', href: '/docs/assurance/pipeline' },
       { label: 'Change assurance', href: '/docs/assurance/change' },
@@ -478,7 +493,7 @@ export const PRODUCT_PAGES: ProductPage[] = [
     ],
     notEstablished: [
       'That an advisory is genuine, correct, complete or current. A fetch that succeeded records what a host said at that time.',
-      'That a machine is affected or unaffected. Matching works on the labels in a sealed manifest; a range the model cannot represent is not matched, and no version-range arithmetic is done.',
+      'That a machine is affected or unaffected. `fleet advisory` matches the labels in a sealed manifest and does no version-range arithmetic. The CSAF import (`ingest csaf-impact`) compares dotted-decimal ranges only, and a range it cannot read is `unknown`, never a match.',
       'That an empty fleet, or no match, means the fleet is clear. A report over an empty fleet says no machine was assessed.',
       'That the supplier’s key belongs to the supplier. The fingerprint has to arrive by a route the advisories do not travel on.',
       'That silence from a supplier is safety: a supplier that has not noticed a vulnerability publishes nothing, and signing cannot detect that.',
@@ -699,7 +714,7 @@ export const PRODUCT_PAGES: ProductPage[] = [
       'machinery.passport_check',
       'fleet.declaration',
     ],
-    related: ['machine-safety-verification', 'continuous-machine-assurance', 'cra-article-14', 'evidence-attestation'],
+    related: ['machine-safety-verification', 'continuous-machine-assurance', 'cra-article-14', 'evidence-attestation', 'machine-passport'],
     docs: [
       { label: 'Machinery Annex III guide', href: '/docs/assurance/machinery' },
       { label: 'Manufacturer view', href: '/solutions/manufacturer' },
@@ -725,6 +740,156 @@ export const PRODUCT_PAGES: ProductPage[] = [
     ],
   },
   // ---------------------------------------------------------------------------------------------
+  {
+    slug: 'machine-passport',
+    name: 'Machine passport',
+    intent: 'What a machine passport is, how anyone re-checks one, and what each verdict means',
+    title: 'Machine passport: what it seals and what it does not',
+    description:
+      'A machine passport seals one machine’s manifest and evidence coverage at a moment. How anyone re-checks it, what each verdict means, and what it cannot show.',
+    kicker: 'Machinery evidence',
+    h1: 'The machine passport: a sealed record of what was assessed, and when',
+    definition:
+      'A machine passport is a sealed record of one machine’s declared safety software and the evidence coverage assessed for it at a single moment, which anyone can re-check for editing and, given the ledger, for having been overtaken.',
+    problem: [
+      'A document that describes a machine at one date is easy to produce and hard to rely on. Whoever holds it can edit it, and nothing in it says when it stopped describing the machine.',
+      'The passport takes the opposite route. It is a view over a hash-chained ledger, not a document written by hand, and it states the configuration it was assessed against, the interventions it knew of, the verification runs it rests on and the weakest tier of that evidence. The checker says plainly what it did not look at.',
+    ],
+    workflow: [
+      {
+        title: 'Seal the position',
+        body: '`assurance machinery passport` reads the manifest, the verification bundles and the recorded interventions out of the ledger, joins them through the declared safety functions, and seals the result as one record. The exit code follows the verdict.',
+        caps: ['machinery.passport', 'machinery.coverage'],
+      },
+      {
+        title: 'Read the verdict',
+        body: 'The verdict is one of `covered`, `covered_at_community`, `gaps`, `no_functions_declared` or `ledger_chain_not_verified`. `covered` means every declared function reads current on evidence at tier validated or better, and exits 0. `covered_at_community` means every function reads current but only on evidence whose provenance the filer declared, so the tier is community; it exits 3. `gaps` and `no_functions_declared` exit 1. `ledger_chain_not_verified` means the ledger’s chain did not verify when read, so nothing in it is covered; it exits 2.',
+        caps: ['machinery.coverage'],
+      },
+      {
+        title: 'Read the sealed state',
+        body: 'Only `covered` seals as verified with high confidence. Every other verdict seals as indeterminate with low confidence.',
+        caps: ['machinery.passport'],
+      },
+      {
+        title: 'Know the format',
+        body: 'A passport an older checker can express has a schema name ending in /1. One carrying covered at community or ledger chain not verified ends in /2, and an older checker refuses it by schema name instead of reading it as a tamper.',
+        caps: ['machinery.passport_check'],
+      },
+      {
+        title: 'Re-check it with no account',
+        body: '`assurance machinery check` and `POST /v1/machinery/passport/check` re-verify a passport you did not produce, for anyone, with no key, and the route is not metered. The checker recomputes the seal, confirms that the printed blocks repeat the sealed body, and confirms that the sealed claim is coherent. With no ledger it answers ok with a stated limitation, not a clean pass.',
+        caps: ['machinery.passport_check'],
+      },
+      {
+        title: 'Check it against the ledger',
+        body: '`assurance machinery check --ledger` repeats the check against the ledger the passport came from, and `POST /v1/machinery/passport/check-ledger` does it over HTTP against the caller’s own ledger on the Cell plan. It confirms that the named records exist and the chain verifies, and rejects the passport as superseded when the ledger later recorded a look at another configuration, a changed safety-function declaration, a change the passport does not list, or a record that cannot be read.',
+        caps: ['machinery.passport_check_ledger'],
+      },
+      {
+        title: 'Seal a new one',
+        body: 'When a passport is superseded, assess and seal a new one. The earlier one stays in the ledger as a record of its moment.',
+        caps: ['machinery.passport'],
+      },
+    ],
+    youGet: [
+      'You get one JSON file. Its sealed part names the machine, the manifest and configuration hashes, the verdict, the weakest evidence tier, each function’s status, the interventions it knew of, the verification bundles it rests on, and whether the ledger chain verified. The manifest, coverage and interventions are printed beside the seal for a person to read.',
+      'The checker answers with ok, the problems, what it checked, the recorded verdict and the functions that are not current. A buyer, an auditor or an insurer can run it, because a passport only its issuer can verify is a certificate rather than evidence.',
+    ],
+    notEstablished: [
+      'That it is a certificate, an approval or a legal judgement. A passport does not say the machine is safe or that it conforms to any law or standard, and it is not a conformity assessment.',
+      'That a seal is a signature. The seal is a content hash anyone can recompute: it shows the file was not edited, not who made it. Signing a ledger head is a separate act.',
+      'That covered means the behaviour was shown on the machine. It means the recorded evidence still stands and no recorded intervention has disturbed it.',
+      'That the manifest is complete. A safety-relevant item nobody listed is covered by nothing and reported by nothing.',
+      'That nothing has changed since. Only what the ledger recorded counts, so an unrecorded change is invisible. The check with no ledger cannot see later records at all, so a superseded passport still checks ok there.',
+      'That the people named are who they say. Identities in the records are declarations unless a signature binds them.',
+    ],
+    whoActs: [
+      'People decide who enrols the machine, which verifications count, which interventions are recorded and whether a passport is shared; software assembles and checks it. Whether a changed configuration amounts to a substantial modification that needs a new conformity assessment is a question for the manufacturer and, where one is involved, a notified body; this record does not answer it.',
+    ],
+    statusNote:
+      'Sealing a passport has a command-line verb and an HTTP route but no MCP tool, by design, because it is a record made by a named person. Re-checking one with no ledger is open on all three surfaces with no account. Checking against your own ledger over HTTP or MCP needs the Cell plan; the command-line check against a ledger on your own disk needs no account.',
+    statusCaps: [
+      'machinery.passport',
+      'machinery.passport_check',
+      'machinery.passport_check_ledger',
+      'machinery.coverage',
+      'machinery.manifest',
+      'machinery.intervention',
+      'evidence.ledger_verify',
+      'attest.sign',
+    ],
+    related: ['machinery-regulation-evidence', 'continuous-machine-assurance', 'evidence-attestation', 'machine-evidence-ledger'],
+    docs: [
+      { label: 'Machinery Annex III guide (the passport section)', href: '/docs/assurance/machinery' },
+      { label: 'Insurer and auditor view', href: '/solutions/insurer-auditor' },
+      { label: 'Operator pipeline', href: '/docs/assurance/pipeline' },
+    ],
+    faq: [
+      {
+        q: 'Is a machine passport a certificate?',
+        a: 'No. It is a sealed record of what was assessed at one moment. It makes no legal judgement, does not say the machine is safe or conforms to any law or standard, and nobody signs it.',
+      },
+      {
+        q: 'Can I check a passport without an account?',
+        a: 'Yes. The command assurance machinery check and the route POST /v1/machinery/passport/check are open to anyone, and the route is not metered. With no ledger they confirm the seal and internal consistency, and say they confirmed nothing else.',
+      },
+      {
+        q: 'What does covered at community mean?',
+        a: 'Every declared safety function reads current, but only on evidence whose provenance the filer declared, so the tier is community, below validated. The recorded evidence stands; nothing was shown on the machine. It exits 3 and uses the /2 schema.',
+      },
+      {
+        q: 'Why can a passport check ok and still be out of date?',
+        a: 'Without the ledger the checker cannot see later records. Checked against the ledger it came from, a passport is rejected as superseded once the ledger holds a later look at another configuration, a changed safety-function declaration, or a recorded change the passport does not list.',
+      },
+    ],
+    example: {
+      title: 'Worked example, on synthetic data.',
+      note: 'Every name, hash and figure is invented: the machine DemoCo/AR-7#DEMO-0001, its firmware and its traces come from the repository’s synthetic workflow example, and nothing here describes real equipment. The commands are the real ones, run from a checkout; this is their output, with each line that changes on every run replaced by “…”. Commands after the first run inside the demo folder. INT-DEMO-1 is listed under the passport because that intervention record does not itself name a re-run; the later verification is what makes the two functions current.',
+      steps: [
+        {
+          command: 'python examples/workflow/run.py --keep demo',
+          output: '…\nSYNTHETIC DEMONSTRATION — every step gave the documented result.',
+        },
+        {
+          command: 'python -m assurance machinery passport --ledger ledger.db --actor v.demo manifest.json --no-seal',
+          output: 'DemoCo/AR-7#DEMO-0001 — COVERED\n  configuration 017256be1c63  manifest MAN-DEMO-1\n  [ok    ] SF-01 [PL d]  Protective separation in speed-and-separation monitoring\n…\n  [ok    ] SF-02 [PL d]  Speed limit in collaborative operation\n…\n  Interventions on safety-bearing items with nothing re-run: INT-DEMO-1\n  1 recorded intervention(s)\n  sealed as …',
+        },
+        {
+          command: 'python -m assurance machinery check passport.json',
+          output: 'passport.json: OK\n  - NOT CHECKED: no ledger was supplied, so only the passport\'s internal integrity was confirmed. Nothing here shows the records it names exist.\n…\n  Supply --ledger to check the records it names, not just the seal.',
+        },
+        {
+          command: 'python -m assurance machinery check --ledger ledger.db passport.json',
+          output: 'passport.json: OK',
+        },
+        {
+          command: 'sed \'s/"verdict": "covered"/"verdict": "gaps"/\' passport.json > edited.json',
+          output: '',
+        },
+        {
+          command: 'python -m assurance machinery check edited.json',
+          output: 'edited.json: REJECTED\n  - the evidence does not hash to the value it carries (…). The passport was edited after sealing.\n  - the passport records verdict \'gaps\' but its own function list implies \'covered\' (0 not current).\n…',
+        },
+        {
+          command: 'sed \'s/INT-DEMO-1/INT-DEMO-2/\' intervention.json > intervention-2.json',
+          output: '',
+        },
+        {
+          command: 'python -m assurance machinery record-change --ledger ledger.db --actor m.tech intervention-2.json',
+          output: 'INT-DEMO-2  2026-03-14T09:30:00Z  update  ITM-FW  by m.tech (service technician)\n…\n    sealed … as entry …',
+        },
+        {
+          command: 'python -m assurance machinery check --ledger ledger.db passport.json',
+          output: 'passport.json: REJECTED\n  - superseded: change \'INT-DEMO-2\' on \'ITM-FW\' was recorded after this passport (ledger position …) and the passport does not list it. Assess and seal a new passport.',
+        },
+        {
+          command: 'python -m assurance machinery check passport.json',
+          output: 'passport.json: OK\n…',
+        },
+      ],
+    },
+  },
   {
     slug: 'machine-safety-verification',
     name: 'Machine safety verification',
@@ -893,7 +1058,7 @@ export const PRODUCT_PAGES: ProductPage[] = [
       'attest.preflight',
       'attest.trust_list_add',
     ],
-    related: ['machine-evidence-ledger', 'machine-safety-verification', 'offline-assurance-kit', 'assurance-api-and-mcp'],
+    related: ['machine-evidence-ledger', 'machine-safety-verification', 'offline-assurance-kit', 'assurance-api-and-mcp', 'machine-passport'],
     docs: [
       { label: 'Attestation guide', href: '/docs/assurance/attest' },
       { label: 'Key ceremony', href: '/docs/assurance/key-ceremony' },
@@ -922,17 +1087,17 @@ export const PRODUCT_PAGES: ProductPage[] = [
   {
     slug: 'offline-assurance-kit',
     name: 'Offline assurance kit',
-    intent: 'An enrolment kit that runs inside the plant and opens no sockets',
-    title: 'Offline assurance kit: enrol machines with no network',
+    intent: 'An enrolment kit that runs inside the plant behind a guard that records network attempts',
+    title: 'Offline assurance kit: enrol machines on-site',
     description:
-      'A kit that enrols machines on the plant side, writes your own ledger and report, and runs behind a socket guard that refuses and records every outbound attempt.',
+      'A kit that enrols machines on the plant side and writes your own ledger and report, behind a guard that refuses and records outbound attempts it can see.',
     kicker: 'Offline kit',
     h1: 'The offline assurance kit: a ledger on your disk and a guard that records any attempt to reach out',
     definition:
       'The offline assurance kit is a runnable folder that enrols machines from exported files into a ledger on the plant’s own disk, with no account, no upload and a guard over the process’s network layer.',
     problem: [
       'A tool that runs inside a plant has to get past the plant’s network and IT review. Vendors routinely say that it works offline and nothing leaves the network, and plant IT cannot check that statement.',
-      'The kit answers with a record instead of a promise. It arms a guard over the process’s socket layer and process creation, refuses every outbound connection, records any attempt with the line of code that made it, and seals that record into the account holder’s own ledger.',
+      'The kit answers with a record instead of a promise. It arms a guard over the process’s socket layer and process creation, refuses and records any outbound attempt it can see with the line of code that made it, and seals that record into the account holder’s own ledger. The guard runs inside the process it watches, so a network namespace is what enforces the boundary at the operating-system level.',
     ],
     workflow: [
       {
@@ -984,7 +1149,7 @@ export const PRODUCT_PAGES: ProductPage[] = [
     ],
     faq: [
       {
-        q: 'Does the kit really open no sockets?',
+        q: 'Can the kit be shown not to reach the network?',
         a: 'A guard refuses and records outbound connections, name resolution and process creation during a run, and a test suite checks it from outside. It records intent in-process, so a network namespace is the enforced boundary.',
       },
       {

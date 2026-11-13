@@ -48,9 +48,10 @@ export default function TrustPage() {
               <div>
                 <p>
                   Reads the files you name and writes a ledger, a report and an attestation request to a folder on your
-                  disk. The run arms a guard over the process&apos;s socket layer and refuses every outbound
-                  connection, including name resolution, and seals a record of any attempt into your own ledger. No
-                  account, no key, no upload.
+                  disk. The run arms a guard that refuses and records any outbound connection it can see,
+                  including name resolution, and seals a record of any attempt into your own ledger. The guard runs
+                  inside the process it watches; a network namespace is the operating-system boundary. No account, no
+                  key, no upload.
                 </p>
                 <p><span className="tag is-offline">runs on your machine</span></p>
               </div>
@@ -279,10 +280,13 @@ export default function TrustPage() {
               </p>
             </li>
             <li>
-              <h3>The offline kit opens no sockets</h3>
+              <h3>The offline kit refuses and records network and process attempts</h3>
               <p>
-                That is enforced by a guard in the process, not asserted by a policy page. <code>kit check</code> lists
-                every file a run would open and touches nothing, so your IT department can review it first.
+                A guard in the process refuses and records any network or process attempt it can see, and the sealed
+                record says if it refused anything. It records intent from inside the process it watches: for an
+                operating-system-enforced boundary, run the kit inside a network namespace (the repository ships{' '}
+                <code>.github/scripts/netns-run.sh</code> for that). <code>kit check</code> lists every file a run would
+                open and touches nothing, so your IT department can review it first.
               </p>
             </li>
           </ul>

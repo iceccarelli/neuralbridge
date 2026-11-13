@@ -7,7 +7,7 @@ const ORIGIN = describeOrigin(process.env.NEXT_PUBLIC_ASSURANCE_API_URL || '', '
 // The route a customer takes, in order, and an honest answer for each step to "can I do this here?".
 // Hosted means this build has an Assurance API address and the step is a call to it; the server still
 // decides, per key, what the plan allows (a 402 is shown where it happens). Offline means the step is
-// a command on the customer's own machine, which opens no sockets of its own.
+// a command on the customer's own machine that needs no network and no API address.
 export default function JourneyNav({ current }: { current?: string }) {
   return (
     <nav className={styles.journey} aria-label="Customer journey" data-testid="journey-nav">

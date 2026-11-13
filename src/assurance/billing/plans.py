@@ -214,8 +214,10 @@ PLANS: dict[Tier, Plan] = {
             "POST /v1/spec/validate — what is missing, what exceeds a character limit, "
             "which listed territories are not EU Member States",
             "GET /v1/spec/fields — the full field specification per track and stage",
-            "POST /v1/machine/separation — the ISO/TS 15066 protective separation "
-            "distance for your cell, term by term, from your own stop figures",
+            "POST /v1/machine/separation — the protective separation distance for "
+            "your cell, term by term, from your own stop figures. Arithmetic on the "
+            "numbers you supply with an unverified formula; not a risk assessment "
+            "and not a conformity statement",
             "POST /v1/machine/bundle/check — re-verify anybody's evidence bundle. "
             "Always free: a bundle only a paying customer can check is worth nothing",
             "POST /v1/machinery/diff — whether a machine still matches the "
@@ -227,7 +229,9 @@ PLANS: dict[Tier, Plan] = {
             "most needs this is the buyer, not the seller",
             "The offline enrolment kit — `assurance kit run` collects your "
             "machines inside your own plant, into your own ledger, with a guard "
-            "over the socket layer proving nothing left. No account, no upload, "
+            "that refuses and records any network or process attempt it can see "
+            "(run it inside a network namespace for an operating-system-enforced "
+            "boundary). No account, no upload, "
             "and free: if it needed a licence it would need a procurement "
             "review, which is the thing it exists to avoid",
             "POST /v1/ledger/attest/verify and GET /v1/ledger/attest/key — check "

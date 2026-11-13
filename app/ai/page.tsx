@@ -4,7 +4,7 @@ import { buildMetadata } from '../lib/seo';
 import AiWorkspace from '../components/AiWorkspace';
 
 export const metadata: Metadata = buildMetadata({
-  title: 'AI',
+  title: 'AI control plane: read, plan, approve',
   description:
     'The agent control plane: discover a connection, read it, plan a write, approve it, get a receipt. The shared demo connection is read-only.',
   path: '/ai',

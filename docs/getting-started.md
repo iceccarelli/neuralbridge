@@ -32,8 +32,10 @@ python -m assurance kit run  plant/kit.json --out plant/out
 `kit check` and `kit run` exit 2 while template values remain (`kit run` refuses to produce evidence with them). Once
 they are replaced and your exports are in place, you get `plant/out/report.html`, `plant/out/evidence.db`, and
 `plant/out/attestation-request.json`. The run arms a guard over the
-process's own socket layer, refuses every outbound connection — including
-name resolution — and seals a record of any attempt into your own ledger.
+process's own socket layer, refuses and records any outbound connection it can see —
+including name resolution — and seals a record of any attempt into your own ledger. It
+watches from inside the process; for an operating-system-enforced boundary, run the kit
+inside a network namespace.
 
 ## Run the API
 
@@ -60,6 +62,6 @@ network calls.
 ## Next
 
 - [Assurance engines](assurance/index.md) — what each command establishes,
-  and the finding nobody else produces.
+  and the finding it is built to report.
 - [The operator pipeline](assurance/pipeline.md) — a public vulnerability record
   to a machine passport, in the order an operator runs it.

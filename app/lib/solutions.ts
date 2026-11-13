@@ -5,6 +5,8 @@ import { productHref } from './productPages';
 export interface SolutionPage {
   slug: string;
   role: string;
+  /** The page's <title> before the brand suffix: names the topic, not only the audience. */
+  metaTitle: string;
   kicker: string;
   headline: string;
   lead: string;
@@ -22,6 +24,7 @@ export const SOLUTIONS: SolutionPage[] = [
   {
     slug: 'manufacturer',
     role: 'Manufacturer',
+    metaTitle: 'CRA Art. 14 and Annex III for manufacturers',
     kicker: 'For manufacturers placing machines on the EU market',
     headline: 'Your Declaration of Conformity describes the machine only as it was the day you signed it.',
     lead:
@@ -29,13 +32,13 @@ export const SOLUTIONS: SolutionPage[] = [
     clockAngle:
       'CRA Art. 14 puts a 24-hour early-warning clock on a manufacturer from the moment it becomes aware that a vulnerability in its product is actively exploited — even for products placed on the market before 11 Dec 2027 (Art. 69(3)). Machinery Reg. Annex III 1.1.9 requires the machine to identify the software it needs to operate safely and to collect evidence of intervention in, or modification of, that software or its configuration, applying 20 Jan 2027.',
     painPoints: [
-      { title: 'The paperwork drifts silently', body: 'A configuration change nobody logged against the Declaration is the normal case, not the exception — and it is invisible until an auditor, insurer, or regulator asks.' },
+      { title: 'The paperwork drifts silently', body: 'Configuration drift — a change nobody logged against the Declaration — is the normal case, not the exception, and it is invisible until an auditor, insurer, or regulator asks.' },
       { title: 'A supplier advisory names your components, not your machines', body: 'Matching a CVE or safety advisory to which serial numbers actually run the affected firmware is manual, error-prone, and usually skipped.' },
       { title: 'You need evidence, not a promise', body: 'A Declaration bound to a configuration hash can be shown to have stopped describing the machine — on a date, not an argument.' },
     ],
     proof: [
       { title: 'Declarations bound to a configuration hash', body: 'The Cell tier binds a Declaration of Conformity to a configuration hash, so drift becomes a checkable date.', href: `/docs/assurance/fleet` },
-      { title: 'Fleet advisory fan-out', body: 'One supplier advisory matched against every enrolled serial by hash, then version, then name — never version-range arithmetic.', href: `/docs/assurance/fleet` },
+      { title: 'Fleet advisory fan-out', body: 'One supplier advisory matched against every enrolled serial by hash, then version, then name. `fleet advisory` does no version-range arithmetic; the CSAF import reads dotted-decimal ranges only and says unknown otherwise.', href: `/docs/assurance/fleet` },
       { title: 'A signed supplier advisory can open a case', body: 'An advisory in a feed signed under a key your account pinned can open a change-assurance case without a named person; unsigned content cannot. Closing the case stays a named person’s decision.', href: `/docs/assurance/change` },
       { title: 'The workflow for Annex III 1.1.9 evidence', body: 'Identify the safety-relevant software, record each intervention, and see which verifications it made stale, step by step.', href: productHref('machinery-regulation-evidence') },
       { title: 'Advisories and fleet impact', body: 'How a supplier advisory is matched to enrolled machines by hash, and why a vendor advisory describes a product, not what you installed.', href: productHref('supplier-advisory-fleet-impact') },
@@ -47,6 +50,7 @@ export const SOLUTIONS: SolutionPage[] = [
   {
     slug: 'system-integrator',
     role: 'System integrator',
+    metaTitle: 'Fleet advisories for system integrators',
     kicker: 'For the team that commissions and changes safety software on site',
     headline: 'Every change you make on site is one the customer, and later an auditor, may ask you to evidence.',
     lead:
@@ -62,7 +66,7 @@ export const SOLUTIONS: SolutionPage[] = [
       { title: 'Record an intervention against a baseline', body: 'Seal an intervention record and a new manifest; the divergence from the declared baseline is listed item by item, not summarised as pass or fail.', href: productHref('continuous-machine-assurance') },
       { title: 'See which verifications a change made stale', body: 'The staleness join names the safety functions whose last recorded verification is older than the change, and the tier each stands at.', href: productHref('machinery-regulation-evidence') },
       { title: 'Collect without false drift alarms', body: 'Vendor tools stamp volatile headers into their own exports. The collect commands find those before they produce a year of false drift.', href: `/docs/assurance/collect` },
-      { title: 'Into the customer’s own ledger, offline', body: 'The offline kit writes to a ledger on the customer’s disk and refuses every outbound connection during a run. You do not host their evidence.', href: `/docs/assurance/kit` },
+      { title: 'Into the customer’s own ledger, offline', body: 'The offline kit writes to a ledger on the customer’s disk, and a guard refuses and records any network or process attempt it can see during a run. You do not host their evidence.', href: `/docs/assurance/kit` },
       { title: 'A recorder attestation, accepted only under their keys', body: 'A trace can be signed by a recorder key; the verifier accepts it only under a trust list they hold. Without one it is a claim, not a validation.', href: `/docs/assurance/machine` },
     ],
     primaryCta: { label: 'Run the offline kit', href: QUICKSTART },
@@ -71,6 +75,7 @@ export const SOLUTIONS: SolutionPage[] = [
   {
     slug: 'plant-operator',
     role: 'Plant operator',
+    metaTitle: 'Configuration records for plant operators',
     kicker: 'For teams running the machines, not building them',
     headline: 'You did not change the firmware. You will still be asked to explain what did.',
     lead:
@@ -84,7 +89,7 @@ export const SOLUTIONS: SolutionPage[] = [
     ],
     proof: [
       { title: 'The staleness join', body: 'A sign-off from February, a firmware change in March, and the named safety functions whose evidence stopped applying — dated, not argued.', href: `/docs/assurance/machinery` },
-      { title: 'Offline enrolment kit', body: 'Your ledger, your disk. No account, no upload, and a guard that refuses every outbound socket during a run.', href: `/docs/assurance/kit` },
+      { title: 'Offline enrolment kit', body: 'Your ledger, your disk. No account, no upload, and a guard that refuses and records any network or process attempt it can see during a run.', href: `/docs/assurance/kit` },
       { title: 'Enrolment you can amend, not rewrite', body: 'A named person declares a machine’s identity and a baseline is sealed with a receipt. A changed site or owner is a new, chained record; the original is never rewritten.', href: `/docs/assurance/machinery` },
       { title: 'The cycle from enrolment to passport', body: 'Enrol, seal a manifest, verify, detect change, find stale evidence, re-verify and record the intervention.', href: productHref('continuous-machine-assurance') },
       { title: 'What the offline kit does and does not do', body: 'Who it is for, what the socket guard records, and the limits it states about itself.', href: productHref('offline-assurance-kit') },
@@ -96,6 +101,7 @@ export const SOLUTIONS: SolutionPage[] = [
   {
     slug: 'compliance-officer',
     role: 'Safety / compliance engineer',
+    metaTitle: 'Evidence for safety and compliance engineers',
     kicker: 'For the person who signs the filing',
     headline: 'The 24-hour clock does not pause for a spreadsheet.',
     lead:
@@ -119,6 +125,7 @@ export const SOLUTIONS: SolutionPage[] = [
   {
     slug: 'insurer-auditor',
     role: 'Insurer / auditor',
+    metaTitle: 'Checking machine evidence: insurers, auditors',
     kicker: 'For the person who has to check someone else’s evidence',
     headline: 'You should never need an account to verify a claim.',
     lead:
@@ -136,6 +143,7 @@ export const SOLUTIONS: SolutionPage[] = [
       { title: 'Completeness against a signed anchor', body: 'A ledger export checked with the signer’s public key and an attestation log can show that nothing up to the anchored head was removed (records after it are covered by no signature); without an anchor the check reports completeness as not checked, never as a pass.', href: `/docs/assurance/attest` },
       { title: 'What a signature proves and does not', body: 'Counter-signed heads, anchors and the key ceremony, which is prepared and not performed.', href: productHref('evidence-attestation') },
       { title: 'The evidence ledger', body: 'What a hash chain detects, what it cannot, and how anchors and completeness reporting address it.', href: productHref('machine-evidence-ledger') },
+      { title: 'What a machine passport is and is not', body: 'A sealed record of one machine’s position at one moment, free to re-check with no account; checked against the ledger it came from, it can be shown to have been overtaken.', href: productHref('machine-passport') },
     ],
     primaryCta: { label: 'Verify a bundle', href: '/#products' },
     secondaryCta: { label: 'Read how attestation works', href: `/docs/assurance/attest` },
@@ -144,6 +152,7 @@ export const SOLUTIONS: SolutionPage[] = [
   {
     slug: 'ai-ops',
     role: 'AI / ops platform team',
+    metaTitle: 'Agent control plane for AI and ops teams',
     kicker: 'For teams building on top of the platform layer',
     headline: 'The assurance product is built on an integration layer you can run from source.',
     lead:
