@@ -228,6 +228,48 @@ scripts), `scripts/build-dist.sh --out <dir> --expect-tag v0.1.1` (exit 0: `neur
 `scripts/verify-release.sh` without a digest prints `UNCHECKED: --digest is required` (exit 2): no image has been published, so
 there is no real digest to verify.
 
+## Evidence level of the 2026-11 assurance-hardening change set
+
+Branch `claude/adoring-ptolemy-4x59ey`, cut from main `2b41ddb`. **Nothing here is merged to main, deployed, or configured with a
+real secret.** The levels, in the order the product's own ladder uses:
+
+| Level | Status | What was run (2026-11-12/13, sandbox: Python 3.13, Node 22, PostgreSQL 16.15, Chromium 1243, no Docker daemon) |
+|---|---|---|
+| Implemented locally | yes | the changes in `docs/claims-registry.md`, section "Added with the 2026-11 assurance-hardening change set" |
+| Tested against a real local stack | yes | main `2b41ddb` baseline: 10,991 tests, all pass once two *environment* gaps are closed (the Postgres role needs `SUPERUSER`, as CI's image gives it; one test is skipped when run as root and passes as an unprivileged user). Integrated tree: **12,114 passed, 1 skipped (that same root-only test, which passes as `nobody`: 15 passed in its file), 0 failed**, Postgres and network-namespace gates required, `NEURALBRIDGE_REQUIRE_NODE=1`. `ruff` 0.17.5 (the newest published, inside the repo's bound) clean on `src/ tests/`; `npx tsc --noEmit` exit 0; `npm run build` exit 0; `python -m assurance capabilities --check` agrees; browser E2E `scripts/e2e-local.sh` **236 passed (118 desktop + 118 mobile), 0 failed, 0 skipped** (a first attempt ran no browser at all because the pinned Playwright wants Chromium build 1254 and the sandbox has 1243; that is a gate that did not run, and the result above is the re-run with `PLAYWRIGHT_CHROMIUM_PATH`); `scripts/local-stack.sh verify` passes (9 real HTTP requests, checkout refuses with `503 price_not_configured`); `scripts/rehearse-local.sh` 39/39 (webhook forgery/replay, key issuance, lapse, backup/verify/restore). Independent stress repo against this branch: **1,702 passed, 6 skipped, 3 failed**; see the note on the 3 below |
+| Deployed to staging | **no** | `docker compose` and the Fly/Kubernetes/Helm files were not exercised (no Docker daemon, no cluster, no Fly account) |
+| Deployed to production | **no** | |
+| Configured with real secrets | **no** | no Stripe key or price, no service signing key, no recorder trust list |
+| Available to customers | **no** | the website still says so |
+
+**The 3 stress failures are expected drift, not a defect.** `test_live_site.py` compares the files deployed at neuralbridge.io
+(`/llms.txt`, `/openapi.json`, `/.well-known/agent.json`) with this source tree. They differ because this branch changed them
+and nothing is deployed (the live `llms.txt` still carries an internal deployment note the source no longer has). They pass
+again when the founder deploys the site from this source; do not loosen the test.
+
+**Behaviour changes a deployer should know about.**
+* Machine verification is engine **7**. Engine-6 bundles still verify and replay under engine 6's rules, but an *older verifier*
+  rejects an engine-7 bundle as an unknown engine, and every engine-6 bundle checked by this build now returns a note in `limitations`.
+* A damaged row anywhere in a watch ledger now stops `watch run` / `watch status` (exit 2) instead of carrying on.
+* The incident one-month Article 14 deadline is earlier than before for about 1.67% of timestamps (up to 2 d 23 h 58 min); it is computed
+  at read time, so a stored case can show a filing as late that was on time under the previous reading (flagged
+  `late_only_under_earliest_reading`). Nothing sealed changes.
+* `POST /v1/cases/{id}/measure` and `/user-notification` now require a decider operator (an account-level key gets 403).
+* A key file must be exactly one PEM block (also the hosted `X-Issuer-Public-Key` header).
+* The kit no longer seals an incomplete machine as its configuration (unless `--seal-incomplete`) and reports `recorded`, not `enrolled`.
+* MCP `machine_verify` no longer records anything.
+
+**Needs a decision or an action that is not an engineering one.**
+* Founder: the JSON-LD price offers, the "talk to sales" wording, `/ai` 402-versus-401, and the "MCP gateway: Supported" label
+  (see the end of the new registry section). Deploying the site; merging to main.
+* A qualified lawyer: the five open Article 14 questions, which every case lists (`clock.OPEN_LEGAL_QUESTIONS`). The software shows
+  the rule and never replaces the due time with another reading.
+* A human with the standards: the ISO/TS 15066 / ISO 13855 constants remain unverified, and `deploy/assurance/MACHINE.md` lists the
+  qualified-review points.
+* A human diff of the ENISA single-reporting-platform glossary: pinned v1.3, live v1.6 (21 Oct 2026).
+* A Docker-capable environment: the `/data` ownership of a Fly volume for the non-root image (a root-owned volume would make
+  `/healthz` answer 503) was read in code, not run.
+
 ## Deployment topology: what the code enforces and what it needs
 
 Read this before choosing a host, a volume or a machine count. Each line says where it comes from; a line
