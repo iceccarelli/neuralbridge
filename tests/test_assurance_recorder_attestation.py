@@ -1252,10 +1252,13 @@ class TestMcp:
         await server.machine_verify({}, {}, "a.b", recorder_attestations=[{"x": 1}],
                                     machine_serial="SN-1")
         assert (seen["method"], seen["path"]) == ("POST", "/v1/machine/verify")
+        # `seal` is always sent, and always false: the tool computes and does not record
+        # (tests/test_assurance_mcp_write_classification.py). It is not a parameter of the tool.
         assert set(seen["body"]) == {"envelope", "trace", "actor", "recorder_attestations",
-                                     "machine_serial"}
+                                     "machine_serial", "seal"}
         await server.machine_verify({}, {}, "a.b")
-        assert set(seen["body"]) == {"envelope", "trace", "actor"}
+        assert set(seen["body"]) == {"envelope", "trace", "actor", "seal"}
+        assert seen["body"]["seal"] is False
         params = set(inspect.signature(server.machine_verify).parameters)
         assert not [p for p in params if "trust" in p or "key" in p or "basis" in p]
 
