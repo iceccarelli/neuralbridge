@@ -35,8 +35,9 @@ show, so a case view can display both and explain the difference.
 from __future__ import annotations
 
 import calendar
+import functools
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 from ...core.errors import ClockError
@@ -47,9 +48,14 @@ __all__ = [
     "EARLY_WARNING_HOURS",
     "NOTIFICATION_HOURS",
     "VULNERABILITY_FINAL_DAYS",
+    "OPEN_LEGAL_QUESTIONS",
+    "RULE_HISTORY",
+    "RULE_VERSION",
     "Deadline",
     "Deadlines",
+    "MonthReadings",
     "add_one_month",
+    "incident_final_due_at",
     "platform_displayed_notification_due",
 ]
 
@@ -61,6 +67,67 @@ VULNERABILITY_FINAL_DAYS = 14     # Art. 14(2)(c)
 #: hours after submission of the early warning, not from awareness.
 _PLATFORM_COUNTER_OFFSET_HOURS = 48
 
+#: Version of the counting rules in this module. Bump it, and add a line to :data:`RULE_HISTORY`,
+#: whenever a change here can alter the due time of ANY deadline for ANY input. It is printed in
+#: every deadline's ``basis`` and in the register report, so a deadline that moved because the
+#: rule changed (and not because a fact changed) is visible when two exports are compared.
+RULE_VERSION = "2"
+
+RULE_HISTORY: tuple[tuple[str, str], ...] = (
+    ("1", "one-month incident final report = add_one_month() of the UTC instant (before 2026-11-12)."),
+    ("2", "one-month incident final report = the earlier of that and the end of the same date one "
+          "month later in the calendar of every fixed UTC offset -12:00..+14:00 (15-minute grid); "
+          "24 h, 72 h and 14 d unchanged."),
+)
+
+#: Questions the arithmetic cannot settle. They are shown with the deadlines, never answered by
+#: this software: a qualified lawyer must decide each. The ``id`` is what a deadline's ``basis``
+#: points at.
+OPEN_LEGAL_QUESTIONS: tuple[dict[str, str], ...] = (
+    {
+        "id": "reg_1182_71_applies",
+        "question": (
+            "Does Regulation (EEC, Euratom) No 1182/71 (rules for periods, dates and time limits) "
+            "apply to the periods in Article 14 of Regulation (EU) 2024/2847? Its Art. 1 reads "
+            "'acts of the Council or Commission'; the CRA is an act of the European Parliament and "
+            "of the Council. Case 139/73 (para. 4) and Case C-171/03 (Toeters) applied it to "
+            "Commission regulations and do not decide this."
+        ),
+    },
+    {
+        "id": "art3_or_art5",
+        "question": (
+            "If it applies, is 'within N days' a period (Art. 3) or an action to be effected "
+            "within a number of days following an event (Art. 5, which applies Art. 3 'with the "
+            "exception of paragraphs 4 and 5')? The answer decides whether a last day on a "
+            "Saturday, Sunday or public holiday moves the end to the next working day (Art. 3(4))."
+        ),
+    },
+    {
+        "id": "calendar_of_the_day",
+        "question": (
+            "In which calendar and time zone is 'the day' or 'the same date' read: the "
+            "submitter's, the manufacturer's main establishment, the coordinating CSIRT's, "
+            "ENISA's, or UTC?"
+        ),
+    },
+    {
+        "id": "meaning_of_submission",
+        "question": (
+            "What is the 'submission' that starts the one-month period of Art. 14(4)(c): the "
+            "manufacturer's act of submitting, or the reporting platform's receipt?"
+        ),
+    },
+    {
+        "id": "art14_4c_trigger_when_waived",
+        "question": (
+            "If the 72-hour incident notification is not submitted because 'the relevant "
+            "information has already been provided' (Art. 14(4)(b)), what starts the one-month "
+            "period of Art. 14(4)(c)?"
+        ),
+    },
+)
+
 
 def add_one_month(moment: datetime) -> datetime:
     """Add one calendar month, clamping to the last valid day.
@@ -69,15 +136,116 @@ def add_one_month(moment: datetime) -> datetime:
     days. 31 January plus one month is the last day of February, not 3 March.
     Time of day is preserved.
 
-    The arithmetic is done on the UTC instant, not in the submitter's own UTC offset. A
-    submission near local midnight can therefore have a due time up to one calendar day earlier
-    than the same wall-clock rule applied in the submitter's zone would give. That is the
-    conservative direction (the deadline is never later than it should be); it is not corrected.
+    The arithmetic is done on the instant in the datetime's own offset (UTC for every instant
+    this package produces), not in the submitter's calendar. That is NOT always the earlier
+    reading: a submission late on the last evening of a month in a zone west of UTC is already
+    "the next day" in UTC, and a month counted from that date ends days after a month counted
+    in the submitter's own calendar. The public function is unchanged (callers rely on it); the
+    incident final-report deadline does not use it alone, it uses
+    :func:`incident_final_due_at`, which also takes the earliest end of "the same date one month
+    later" over every fixed UTC offset (see there).
     """
     year = moment.year + (1 if moment.month == 12 else 0)
     month = 1 if moment.month == 12 else moment.month + 1
     day = min(moment.day, calendar.monthrange(year, month)[1])
     return moment.replace(year=year, month=month, day=day)
+
+
+#: Every fixed UTC offset a clock can show, -12:00 .. +14:00, on a 15-minute grid (the same range
+#: ``timestamps.legal_timestamp`` accepts; no inhabited zone uses a finer step).
+_FIXED_OFFSETS: tuple[timedelta, ...] = tuple(
+    timedelta(minutes=m) for m in range(-12 * 60, 14 * 60 + 1, 15)
+)
+
+
+def _end_of_same_date_one_month_on(moment_utc: datetime, offset: timedelta) -> datetime:
+    """The expiry of the last hour of "the same date one month later", as a UTC instant.
+
+    Reg. (EEC, Euratom) No 1182/71 Art. 3(2)(c): a period in months ends with the expiry of the
+    last hour of the day that falls on the same date in the last month, or of the last day of that
+    month where it has no such date. The date is the one a clock at fixed UTC offset ``offset``
+    shows for ``moment_utc``. ``moment_utc`` must be timezone-aware.
+    """
+    local_date = (moment_utc + offset).date()
+    year = local_date.year + (1 if local_date.month == 12 else 0)
+    month = 1 if local_date.month == 12 else local_date.month + 1
+    day = min(local_date.day, calendar.monthrange(year, month)[1])
+    following = date(year, month, day) + timedelta(days=1)
+    return datetime(following.year, following.month, following.day, tzinfo=UTC) - offset
+
+
+@dataclass(frozen=True)
+class MonthReadings:
+    """The readings the one-month incident deadline is chosen from."""
+
+    #: ``add_one_month`` of the instant: same time of day, UTC calendar (the rule before
+    #: rule version 2).
+    utc_wall_clock: datetime
+    #: The earliest end of "the same date one month later" over every fixed UTC offset, or
+    #: ``None`` if none could be represented.
+    earliest_fixed_offset: datetime | None
+    #: The offset that gave ``earliest_fixed_offset``.
+    at_offset: timedelta | None
+
+    @property
+    def due_at(self) -> datetime:
+        if self.earliest_fixed_offset is not None and self.earliest_fixed_offset < self.utc_wall_clock:
+            return self.earliest_fixed_offset
+        return self.utc_wall_clock
+
+
+@functools.lru_cache(maxsize=4096)
+def _month_readings(moment: datetime) -> MonthReadings:
+    baseline = add_one_month(moment)   # raises where the old rule raised: unchanged behaviour
+    naive = moment.tzinfo is None
+    as_utc = moment.replace(tzinfo=UTC) if naive else moment.astimezone(UTC)
+    best: datetime | None = None
+    best_offset: timedelta | None = None
+    for offset in _FIXED_OFFSETS:
+        try:
+            candidate = _end_of_same_date_one_month_on(as_utc, offset)
+        except (OverflowError, ValueError):
+            continue   # beyond the representable calendar: that reading cannot be earlier
+        if naive:
+            candidate = candidate.replace(tzinfo=None)
+        if best is None or candidate < best:
+            best, best_offset = candidate, offset
+    return MonthReadings(utc_wall_clock=baseline, earliest_fixed_offset=best,
+                         at_offset=best_offset)
+
+
+def incident_final_due_at(notification_submitted_at: datetime) -> datetime:
+    """The one-month incident final-report deadline, Art. 14(4)(c).
+
+    "Within one month after the submission of the incident notification." The product records
+    the submission as a UTC instant and does not know the submitter's calendar, so it takes the
+    EARLIEST of
+
+    * ``add_one_month`` of the instant (same time of day, UTC calendar), and
+    * the end of "the same date one month later" (clamped to the month's last day) in the
+      calendar of EVERY fixed UTC offset from -12:00 to +14:00 on a 15-minute grid, per
+      Reg. (EEC, Euratom) No 1182/71 Art. 3(2)(c) (the period ends with the expiry of the last
+      hour of that day).
+
+    so that for a submission counted in any fixed-offset calendar the deadline shown is never
+    later than the end of the legal period. It can be up to 2 days 23 h 58 min earlier than
+    ``add_one_month``, and does so for about 1.7 % of instants (the evening before a month's end
+    in the west, the morning after it in the east).
+
+    Two things this does NOT do, stated because the rule is a legal reading and not a fact:
+
+    * Whether Reg. 1182/71 applies to a Regulation (EU) 2024/2847 filing period at all, and
+      which calendar "the date" is read in, are open legal questions (see
+      :data:`OPEN_LEGAL_QUESTIONS`). The guard is the conservative direction under any of them.
+    * Residual: in a zone that changes its UTC offset during the month (daylight saving) the
+      result can still be later than the end of the local date by up to one hour (the size of
+      the step), because a fixed offset is used for the month.
+
+    Art. 3(4) (a last day on a public holiday, Saturday or Sunday moves the end to the next
+    working day) can only make a legal date later; it is not applied, so the product's date is
+    never later because of it.
+    """
+    return _month_readings(notification_submitted_at).due_at
 
 
 def platform_displayed_notification_due(early_warning_submitted_at: datetime) -> datetime:
@@ -253,7 +421,7 @@ class Deadlines:
             run_from = min(run_from, self.notification_first_recorded_at)
         return Deadline(
             stage=Stage.FINAL,
-            due_at=add_one_month(run_from),
+            due_at=incident_final_due_at(run_from),
             runs_from=run_from,
             runs_from_fact="submission of the 72-hour incident notification",
             provision="Art. 14(4)(c)",
