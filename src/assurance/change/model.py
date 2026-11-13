@@ -153,6 +153,14 @@ class ChangeAssuranceCase:
     #: ``human_decisions_required``. Absent from :meth:`to_dict` while empty, so a case
     #: sealed before this field existed loads, replays and exports exactly as it did.
     unknown_machines: tuple[dict[str, Any], ...] = ()
+    #: Advisory cases only: the advisory this case was opened on, beyond the hash the
+    #: ``concerns`` link carries (``advisory_id``, ``issued_by``, ``title``, ``severity``,
+    #: ``reference``, ``content_hash``). Optional and absent from :meth:`to_dict` while empty.
+    advisory: dict[str, str] = field(default_factory=dict)
+    #: Advisory cases only: for each exposed ``machine/function``, the verification the
+    #: evidence stood on before the advisory (``{entry, last_verified_at, last_verified_hash}``,
+    #: copied from the impact report). Optional, absent while empty.
+    previous_verifications: tuple[dict[str, str], ...] = ()
     #: Decisions a named person has answered, ``{decision, resolution, by, at}``.
     #: Kept so a re-observation never re-asks a question already answered.
     resolved_decisions: tuple[dict[str, str], ...] = ()
@@ -315,6 +323,15 @@ class ChangeAssuranceCase:
             for u in self.unknown_machines:
                 lines.append(f"    ? {u.get('machine', '?')}: "
                              f"{'; '.join(u.get('reasons') or ()) or 'no reason recorded'}")
+        if self.advisory:
+            a = self.advisory
+            lines.append(f"  advisory   {a.get('advisory_id', '?')} from "
+                         f"{a.get('issued_by', '?')} ({a.get('severity', '?')}): "
+                         f"{a.get('title', '')}")
+        for p in self.previous_verifications:
+            lines.append(f"  previously verified {p.get('entry', '?')}: "
+                         f"{p.get('last_verified_at') or 'never'} "
+                         f"({(p.get('last_verified_hash') or '')[:12] or 'no hash'})")
         if self.human_decisions_required:
             lines.append("  human decisions required:")
             for d in self.human_decisions_required:
@@ -358,6 +375,10 @@ class ChangeAssuranceCase:
                 del out[name]
         if self.unknown_machines:
             out["unknown_machines"] = [dict(u) for u in self.unknown_machines]
+        if self.advisory:
+            out["advisory"] = dict(self.advisory)
+        if self.previous_verifications:
+            out["previous_verifications"] = [dict(p) for p in self.previous_verifications]
         return out
 
     def _to_dict(self) -> dict[str, Any]:
@@ -424,6 +445,9 @@ class ChangeAssuranceCase:
             required_reverifications=tuple(d.get("required_reverifications", ())),
             human_decisions_required=tuple(d.get("human_decisions_required", ())),
             unknown_machines=tuple(dict(u) for u in d.get("unknown_machines", ())),
+            advisory={str(k): str(v) for k, v in dict(d.get("advisory") or {}).items()},
+            previous_verifications=tuple(
+                dict(p) for p in d.get("previous_verifications", ())),
             resolved_decisions=tuple(dict(r) for r in d.get("resolved_decisions", ())),
             owner=str(d.get("owner", "")),
             reviewer=str(d.get("reviewer", "")),

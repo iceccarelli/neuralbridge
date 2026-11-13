@@ -288,6 +288,28 @@ def _union_unknown(
     return tuple(out)
 
 
+def _advisory_meta(existing: ChangeAssuranceCase, new: ChangeAssuranceCase) -> dict[str, str]:
+    """The advisory a case was opened on. Never replaced by a later reading; a case sealed
+    before this field existed gains it only when the reading is of the very document it
+    already links, so a re-issued advisory is not recorded as the one it was opened on."""
+    if existing.advisory:
+        return existing.advisory
+    opened_on = {r.get("content_hash") for r in _advisory_links(existing)}
+    if not opened_on or new.advisory.get("content_hash") in opened_on:
+        return new.advisory
+    return {}
+
+
+def _union_previous(
+    a: Sequence[dict[str, str]], b: Sequence[dict[str, str]],
+) -> tuple[dict[str, str], ...]:
+    """Previous verifications by entry; what the case already recorded is kept."""
+    out = list(a)
+    seen = {p.get("entry") for p in out}
+    out.extend(p for p in b if p.get("entry") not in seen)
+    return tuple(out)
+
+
 def _links_union(
     existing: Sequence[dict[str, str]], new: Sequence[dict[str, str]],
 ) -> tuple[dict[str, str], ...]:
@@ -400,6 +422,9 @@ def _merge(
             human_decisions_required=_union(existing.human_decisions_required,
                                             fresh_decisions),
             unknown_machines=_union_unknown(existing.unknown_machines, new.unknown_machines),
+            advisory=_advisory_meta(existing, new),
+            previous_verifications=_union_previous(existing.previous_verifications,
+                                                   new.previous_verifications),
             linked_evidence=_append_links(existing.linked_evidence, new.linked_evidence),
             checks_skipped=_union(existing.checks_skipped, new.checks_skipped),
             provenance={**new.provenance, **existing.provenance})
@@ -442,6 +467,12 @@ def _merge(
         required_reverifications=reverifs,
         human_decisions_required=decisions,
         unknown_machines=_union_unknown(existing.unknown_machines, new.unknown_machines),
+        advisory=_advisory_meta(existing, new),
+        # Only for entries this look adds: for one the case already tracks, today's coverage
+        # may include the verification this case itself asked for, which is not "previous".
+        previous_verifications=_union_previous(
+            existing.previous_verifications,
+            [p for p in new.previous_verifications if p.get("entry") in added_reverifs]),
         linked_evidence=(
             _append_links(existing.linked_evidence, new.linked_evidence)
             if existing.trigger_type is TriggerType.SUPPLIER_ADVISORY
@@ -897,6 +928,7 @@ def assess_advisory(
     affected: list[str] = []
     evidence_before: dict[str, str] = {}
     required_reverifications: list[str] = []
+    previous: list[dict[str, str]] = []
     for exposure in impact.exposures:
         for f in exposure.functions:
             if f.function_id not in affected:
@@ -904,6 +936,9 @@ def assess_advisory(
             key = f"{exposure.machine_key}/{f.function_id}"
             evidence_before[key] = f.coverage_before.value
             required_reverifications.append(key)
+            if f.last_verified_at or f.last_verified_hash:
+                previous.append({"entry": key, "last_verified_at": f.last_verified_at,
+                                 "last_verified_hash": f.last_verified_hash})
 
     human_decisions: list[str] = []
     required_actions: list[str] = []
@@ -983,6 +1018,15 @@ def assess_advisory(
         required_reverifications=tuple(dict.fromkeys(required_reverifications)),
         human_decisions_required=tuple(dict.fromkeys(human_decisions)),
         unknown_machines=tuple(unknown_rows),
+        advisory={
+            "advisory_id": neutralise(impact.advisory_id),
+            "issued_by": neutralise(impact.issued_by),
+            "title": neutralise(impact.title),
+            "severity": impact.severity.value,
+            "reference": neutralise(impact.reference),
+            "content_hash": impact.advisory_hash,
+        },
+        previous_verifications=tuple(previous),
         linked_evidence=({"relation": "concerns", "content_hash": impact.advisory_hash,
                           "note": f"advisory {neutralise(impact.advisory_id)} from "
                                   f"{neutralise(impact.issued_by)}"

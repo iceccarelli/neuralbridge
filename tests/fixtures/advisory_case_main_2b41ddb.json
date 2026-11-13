@@ -1,0 +1,85 @@
+{
+ "affected_functions": [
+  "SF-01",
+  "SF-02"
+ ],
+ "after_hash": "",
+ "before_hash": "",
+ "case_id": "case-7ee4629e8f4b64fc",
+ "change_severity": "safety_relevant",
+ "changed_items": [
+  {
+   "confidence": "confirmed",
+   "detail": "Grimaldi/AR-7#0412 (Plant 2): the artefact on this machine is byte-identical to one ControlCo named as affected (aaaaaaaaaaaa).",
+   "functions": [
+    "SF-01",
+    "SF-02"
+   ],
+   "item_id": "Grimaldi/AR-7#0412/ITM-FW"
+  }
+ ],
+ "checks_skipped": [
+  "1 machine(s) carry at least one item with no hash. An affected component hiding in an unhashed item would not be found by this assessment.",
+  "this matches the advisory against the latest sealed manifest for each machine. A machine changed since its last manifest, or never enrolled, is absent from this report \u2014 and absence here is not evidence of safety.",
+  "some machines or safety functions are UNKNOWN: the manifest does not let this assessment include or exclude them (see unknown_machines / unknown_functions). A clear result does not cover them."
+ ],
+ "closed_at": "",
+ "confidence": "high",
+ "created_at": "2026-11-13T02:38:07Z",
+ "decision": "",
+ "decision_by": "",
+ "decision_reason": "",
+ "evidence_before": {
+  "Grimaldi/AR-7#0412/SF-01": "never_verified",
+  "Grimaldi/AR-7#0412/SF-02": "never_verified"
+ },
+ "evidence_current": {
+  "Grimaldi/AR-7#0412/SF-01": "never_verified",
+  "Grimaldi/AR-7#0412/SF-02": "never_verified"
+ },
+ "history": [
+  {
+   "at": "2026-11-13T02:38:07Z",
+   "detail": "advisory CTRL-2026-11: 1 machine(s) affected",
+   "kind": "assurance.change.opened"
+  }
+ ],
+ "human_decisions_required": [],
+ "invalidation_reason": "",
+ "linked_evidence": [
+  {
+   "content_hash": "98a9affb4b341c03c44ce8fd14fc302ec2b489f0efa1784aaac5d9074212007d",
+   "note": "advisory CTRL-2026-11 from ControlCo",
+   "relation": "concerns"
+  }
+ ],
+ "machines": [
+  "Grimaldi/AR-7#0412"
+ ],
+ "opened_at": "2026-11-13T02:38:07Z",
+ "owner": "",
+ "prior_closures": [],
+ "provenance": {
+  "changed_items": "assurance.fleet.impact.assess_impact"
+ },
+ "required_actions": [
+  "Establish verification evidence for SF-01 on Grimaldi/AR-7#0412 (never_verified): the advisory reaches an item that implements it, and nothing currently supports it.",
+  "Establish verification evidence for SF-02 on Grimaldi/AR-7#0412 (never_verified): the advisory reaches an item that implements it, and nothing currently supports it."
+ ],
+ "required_reverifications": [
+  "Grimaldi/AR-7#0412/SF-01",
+  "Grimaldi/AR-7#0412/SF-02"
+ ],
+ "resolved_decisions": [],
+ "reverification_requested_at": "",
+ "reverified_at": "",
+ "review_started_at": "",
+ "sites": [
+  "Plant 2"
+ ],
+ "status": "open",
+ "trigger_at": "2026-11-13T02:38:07Z",
+ "trigger_id": "CTRL-2026-11",
+ "trigger_type": "supplier_advisory",
+ "updated_at": "2026-11-13T02:38:07Z"
+}

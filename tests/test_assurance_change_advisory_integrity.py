@@ -12,7 +12,9 @@ Findings this file pins (chain: advisory -> fleet -> case -> human decision -> c
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 
@@ -21,6 +23,7 @@ from assurance.change.replay import reconstruct_case
 from assurance.change.service import (
     CaseTransitionError,
     advance,
+    advisory_case_id,
     assess_advisory,
     claim,
     decide,
@@ -34,8 +37,9 @@ from assurance.fleet.advisory import (
     AdvisorySeverity,
     AffectedArtefact,
     ComponentAdvisory,
+    MatchBasis,
 )
-from assurance.fleet.impact import assess_impact
+from assurance.fleet.impact import Exposure, FunctionExposure, ImpactReport, assess_impact
 from assurance.fleet.registry import Fleet
 from assurance.machinery.manifest import (
     HashSource,
@@ -47,6 +51,7 @@ from assurance.machinery.manifest import (
     SafetyManifest,
 )
 from assurance.machinery.record import record_manifest
+from assurance.machinery.staleness import Coverage
 
 PERSON = Actor("a.integrator", "safety engineer")
 DECIDER = Actor("v.grimaldi", "safety lead")
@@ -281,7 +286,6 @@ class TestAReusedAdvisoryIdIsNotTheClosedCase:
         assert reconstruct_case(ledger, first.case_id).ok
 
     def test_the_case_id_of_the_first_advisory_is_the_one_it_always_had(self, ledger, store):
-        from assurance.change.service import advisory_case_id
         cc, _ = two_suppliers_one_id(ledger)
         impact = impact_of(ledger, cc)
         assert assess_advisory(store, impact, actor=PERSON).case_id == advisory_case_id(impact)
@@ -329,3 +333,103 @@ class TestAReusedAdvisoryIdIsNotTheClosedCase:
         before = len(ledger)
         again = assess_advisory(store, impact_of(ledger, cc), actor=BOT)
         assert again.status is CaseStatus.CLOSED and len(ledger) == before
+
+
+# =====================================================================
+# F8 — the case keeps what the advisory report knew
+# =====================================================================
+
+class TestTheCaseRecordsTheAdvisoryAndThePreviousVerification:
+    def test_the_advisory_is_recorded_on_the_case(self, ledger, store):
+        record_manifest(ledger, manifest("0412", fw()))
+        adv = advisory()
+        case = assess_advisory(store, impact_of(ledger, adv), actor=PERSON)
+        assert case.advisory == {
+            "advisory_id": "CTRL-2026-11", "issued_by": "ControlCo",
+            "title": "Watchdog may not trip", "severity": "safety_relevant",
+            "reference": "https://example.invalid/advisory",
+            "content_hash": adv.content_hash()}
+        assert "advisory   CTRL-2026-11 from ControlCo" in case.summary()
+        assert store.get(case.case_id).advisory == case.advisory      # survives the ledger
+
+    def test_the_previous_verification_of_each_function_is_copied_from_the_report(
+            self, store):
+        # FunctionExposure carries last_verified_at / last_verified_hash; the case keeps them.
+        adv = advisory()
+        fx = FunctionExposure("SF-01", "Protective stop", Coverage.CURRENT, True,
+                              last_verified_at="2026-08-01T00:00:00Z",
+                              last_verified_hash="d" * 64)
+        report = ImpactReport(
+            advisory_id=adv.advisory_id, advisory_hash=adv.content_hash(),
+            issued_by=adv.issued_by, severity=adv.severity, title=adv.title,
+            reference=adv.reference, assessed_at="2026-09-15T00:00:00Z", machines_in_fleet=1,
+            exposures=(Exposure("Grimaldi/AR-7#1", "Plant 2", "ITM-FW", "fw", "3.8.2",
+                                MatchBasis.HASH, "x", (fx,)),),
+            checks_skipped=())
+        case = assess_advisory(store, report, actor=PERSON)
+        assert case.previous_verifications == (
+            {"entry": "Grimaldi/AR-7#1/SF-01", "last_verified_at": "2026-08-01T00:00:00Z",
+             "last_verified_hash": "d" * 64},)
+        assert "previously verified Grimaldi/AR-7#1/SF-01: 2026-08-01T00:00:00Z (dddddddddddd)" \
+            in case.summary()
+
+    def test_a_later_look_never_rewrites_the_advisory_the_case_was_opened_on(
+            self, ledger, store):
+        record_manifest(ledger, manifest("0412", fw()))
+        first = assess_advisory(store, impact_of(ledger, advisory()), actor=PERSON)
+        revised = advisory(title="Watchdog may not trip (revised)", remedy="3.9.1")
+        record_manifest(ledger, manifest("0501", fw()))
+        again = assess_advisory(store, impact_of(ledger, revised), actor=BOT)
+        assert again.advisory == first.advisory
+
+
+OLD = Path(__file__).parent / "fixtures" / "advisory_case_main_2b41ddb.json"
+
+
+class TestACaseSealedBeforeTheseFieldsExistedStillWorks:
+    """``advisory_case_main_2b41ddb.json`` is ``case.to_dict()`` as the unchanged main branch
+    (2b41ddb) wrote it for this ledger world: one hash-confirmed machine (0412) and one
+    unknown one (0804) that the old code left without a question."""
+
+    def old(self):
+        return json.loads(OLD.read_text(encoding="utf-8"))
+
+    def test_it_loads_and_serialises_to_exactly_what_it_was(self):
+        d = self.old()
+        assert ChangeAssuranceCase.from_dict(d).to_dict() == d
+
+    def test_it_renders_without_the_new_sections(self):
+        text = ChangeAssuranceCase.from_dict(self.old()).summary()
+        for absent in ("UNKNOWN machines", "advisory   ", "previously verified"):
+            assert absent not in text
+        assert "Grimaldi/AR-7#0412" in text
+
+    def test_it_replays_and_a_new_look_adds_to_it_without_breaking_the_record(
+            self, ledger, store):
+        record_manifest(ledger, manifest("0412", fw()))
+        unknown_only(ledger)
+        old = replace(ChangeAssuranceCase.from_dict(self.old()), history=())
+        sealed = store.open(old, actor=PERSON, detail="advisory CTRL-2026-11")
+        assert reconstruct_case(ledger, sealed.case_id).ok
+        assert sealed.unknown_machines == () and sealed.advisory == {}
+
+        now = assess_advisory(store, impact_of(ledger, advisory()), actor=BOT)
+        assert now.case_id == sealed.case_id
+        # the old case gains the question it should always have had, and the advisory it
+        # was opened on (the same document), and loses nothing
+        assert [u["machine"] for u in now.unknown_machines] == ["Grimaldi/AR-7#0804"]
+        assert any("0804" in q for q in now.human_decisions_required)
+        assert now.advisory["content_hash"] == advisory().content_hash()
+        assert set(sealed.machines) <= set(now.machines)
+        assert reconstruct_case(ledger, sealed.case_id).ok
+        bundle = ledger.export(subject=sealed.case_id)
+        assert len(bundle["entries"]) == 2
+
+    def test_a_different_document_is_not_recorded_as_the_one_the_old_case_was_opened_on(
+            self, ledger, store):
+        record_manifest(ledger, manifest("0412", fw()))
+        old = replace(ChangeAssuranceCase.from_dict(self.old()), history=())
+        store.open(old, actor=PERSON, detail="advisory CTRL-2026-11")
+        revised = advisory(title="Watchdog may not trip (revised)")
+        now = assess_advisory(store, impact_of(ledger, revised), actor=BOT)
+        assert now.advisory == {}
