@@ -808,7 +808,9 @@ def root() -> dict[str, Any]:
                 "(Art. 14(2)(c))"
             ),
             "final_report_incident": (
-                "1 calendar month from submission of the 72 h notification (Art. 14(4)(c))"
+                "one month from submission of the 72 h notification (Art. 14(4)(c)); the due time "
+                "shown is the earliest end of that month in any fixed-offset calendar, so it can "
+                "be up to 2 days 23 h 58 min before the same time of day one month on"
             ),
         },
         "start_here": {
