@@ -8,36 +8,26 @@ returns the same honest "not configured" error instead of pretending to
 have called anything, matching the fail-closed pattern the rest of this
 site uses (see ``/console`` and ``/developers``).
 
-Tool set is deliberately small, and pinned to the list in
-``deploy/assurance/CHANGE.md`` by ``tests/test_interfaces_mcp.py``: the always-free routes
-(``plans``, ``spec_validate``, ``services``,
-``machine_assurance_check``, ``machine_check``, ``evidence_verify``, ``machinery_passport_check``),
-the paid routes (``machine_verify``, ``machinery_coverage``, ``fleet_report``,
-``fleet_machine_assurance``, Cell tier; ``register_cases``, Register tier) chosen because calling
-them on the wrong plan or with no key surfaces the API's real, structured 401/402 shape (the thing
-an agent needs to see to route a human to checkout, not a summary of it), and the change queue:
-three reads (``change_cases``, ``change_case``, ``change_export``), three writes an agent may make
-(``change_claim``, ``change_advance``, ``change_reverify``) and two that open a case from a
-machine's own manifests (``change_assess_drift``, ``change_assess_intervention``). Eighteen further
-read-only tools (``spec_fields``, ``art14_case``, ``art14_register``, ``art14_breaches``,
-``art14_export``, ``ledger_verify``, ``attest_log``, ``attest_verify``, ``attest_service_key``,
-``machine_separation``, ``machinery_diff``, ``fleet_machines``, ``fleet_observations``,
-``fleet_declaration_check``, ``value_position``, ``change_replay``, ``supplier_trust_list``,
-``supplier_trust_check``) wrap a GET or a POST that answers a question and records nothing.
-Four more reads
-serve public-source intelligence from the operator's shared observation store (``intel_history``,
-``intel_observation``, ``intel_cve``, ``intel_candidates``; Cell tier); there is no tool that
-ingests or fetches a feed, and an unconfigured store is the API's real 503, never an empty
-list. Seven more tools take third-party documents (``sbom_import``, ``sbom_drafts``, ``sbom_draft``,
-``csaf_import``, ``csaf_records``, ``csaf_record``, ``csaf_impact``): the two imports record a
-DRAFT inventory (pending a named person's review) and an unsigned, inspect-only supplier advisory,
-and the rest read. Everything beyond the case work and those two imports reads or verifies and
-never decides or records, and none of it can supply a
-trust list or a public key, so what an agent asks the server to check is judged under the server's
-own configuration. There is no tool that opens a case from an advisory, none that reviews or approves
-an SBOM draft (approval enrols a machine and decides which software is safety-relevant), and no tool that closes, rejects,
-defers or resumes a case, answers its open questions or waives a re-verification: those are a
-named person's, on the CLI or the HTTP API.
+53 tools, pinned to the list in ``deploy/assurance/CHANGE.md`` by ``tests/test_interfaces_mcp.py``
+and to the connector page by ``tests/test_site_mcp_parity.py`` (which also fails if this number or the
+README's drifts from the registered tools). 46 only read or compute and never decide or record: free
+checks and catalogues, the Cell-tier verifications and reads of the account's own ledger, the
+Register-tier Article 14 reads, and the operator's public-source store (``intel_*``). Calling a paid
+one on the wrong plan or with no key surfaces the API's real, structured 401/402 shape (the thing an
+agent needs to see to route a human to checkout, not a summary of it). ``machine_verify`` is one of
+them: it computes a verification and asks the API NOT to seal it (``seal: false``, with no parameter to
+change that); recording it is the account holder's, through the API or the CLI.
+
+Seven tools write the account's ledger, and ``tests/test_assurance_mcp_write_classification.py`` proves
+from the outside that these seven, and only these, do: the change queue's ``change_claim``,
+``change_advance`` and ``change_reverify``; ``change_assess_drift`` and ``change_assess_intervention``,
+which open a case from a machine's own manifests; and ``sbom_import`` and ``csaf_import``, which record
+a DRAFT inventory (pending a named person's review) and an unsigned, inspect-only supplier advisory.
+No tool supplies a trust list or a public key, so what an agent asks the server to check is judged under
+the server's own configuration. There is no tool that opens a case from an advisory, none that reviews or
+approves an SBOM draft (approval enrols a machine and decides which software is safety-relevant), none
+that fetches or ingests a feed, and none that closes, rejects, defers or resumes a case, answers its open
+questions or waives a re-verification: those are a named person's, on the CLI or the HTTP API.
 
 Run with ``assurance-mcp`` (installed via ``pip install -e '.[assurance-mcp]'``)
 or ``python -m assurance.mcp.server``. Transport is stdio by default, which
@@ -69,7 +59,9 @@ mcp: MCPServer = MCPServer(
         "the API's real 401, which is the correct, informative answer — not an "
         "error in this server. You can read and work the change queue; you "
         "cannot decide a case, resume it, answer its open questions or waive a "
-        "re-verification — those need a named person."
+        "re-verification — those need a named person. machine_verify computes a "
+        "verification and does NOT record it: recording is the account holder's, "
+        "through the API or the CLI."
     ),
 )
 
