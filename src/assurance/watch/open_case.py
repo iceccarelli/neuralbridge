@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from assurance.change.service import (
-    advisory_case_id,
+    advisory_case_id_in,
     assess_advisory,
     named_person_problem,
 )
@@ -169,7 +169,7 @@ def open_case_from_report(
             f"{report.verdict!r}), so it is not a current finding; a case is opened only for "
             "an advisory that touches the fleet. Nothing was opened.")
     store = CaseStore(ledger)
-    case_id = advisory_case_id(report)
+    case_id = advisory_case_id_in(store, report)
     existing = store.get(case_id)
     if existing is not None and existing.status.is_settled:
         raise OpenCaseRefusedError(

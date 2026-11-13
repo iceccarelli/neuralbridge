@@ -171,6 +171,7 @@ def draft_from_advisory(
     received_by: str,
     product_name: str = "",
     received_at: datetime | None = None,
+    change_case_id: str = "",
 ) -> CaseDraft:
     """Assemble the intake an advisory implies, and nothing more.
 
@@ -306,7 +307,7 @@ def draft_from_advisory(
     ]
 
     return CaseDraft(
-        case_id=case_id or _default_case_id(advisory, impact),
+        case_id=case_id or _default_case_id(advisory, impact, change_case_id),
         signal=Signal(
             received_at=(received_at or (utc_now() if import_rec is not None
                                          else advisory.issued_at)),
@@ -331,13 +332,23 @@ def draft_from_advisory(
     )
 
 
-def _default_case_id(advisory: ComponentAdvisory, impact: ImpactReport) -> str:
+def _default_case_id(
+    advisory: ComponentAdvisory, impact: ImpactReport, change_case_id: str = "",
+) -> str:
     """``CASE-<advisory id>`` as it always was; an unsigned import's id carries the same
     trust-and-publisher derivation as its change case, so opening it first can never take
-    the id a trusted advisory with the same tracking id will need."""
-    if advisory.import_record is None:
+    the id a trusted advisory with the same tracking id will need.
+
+    ``change_case_id`` is the change case this advisory has in the ledger
+    (:func:`assurance.change.service.advisory_case_id_in`). When it is not the plain one,
+    because another supplier's advisory already holds the plain id, the intake takes the
+    same issuer-derived suffix, so two suppliers' ``SA-1`` are two intakes.
+    """
+    plain = advisory_case_id(impact)
+    resolved = change_case_id or plain
+    if advisory.import_record is None and resolved == plain:
         return f"CASE-{advisory.advisory_id}"
-    return f"CASE-{advisory.advisory_id}-{advisory_case_id(impact)[len('case-'):][:8]}"
+    return f"CASE-{advisory.advisory_id}-{resolved[len('case-'):][:8]}"
 
 
 def _signal_description(advisory: ComponentAdvisory) -> str:
