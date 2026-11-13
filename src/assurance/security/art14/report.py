@@ -17,16 +17,49 @@ from datetime import datetime
 from typing import Any
 
 from ...core.identity import format_utc, utc_now
+from .clock import OPEN_LEGAL_QUESTIONS, RULE_VERSION, Deadline
 from .engine import Art14Register, Case
 from .srp import GLOSSARY_DATE, GLOSSARY_VERSION
 
-__all__ = ["case_report", "readiness_report", "register_report"]
+__all__ = ["basis_lines", "case_report", "readiness_report", "register_report"]
 
 _RULE = "─" * 78
 
 
 def _lines(*parts: str) -> str:
     return "\n".join(parts)
+
+
+def basis_lines(deadline: Deadline, indent: str = "    ") -> list[str]:
+    """The provenance of one deadline in words: the same facts as ``Deadline.to_dict()['basis']``."""
+    b = deadline.basis()
+    sf = b["starts_from"]
+    where = (
+        f"ledger seq {sf['ledger_seq']} {str(sf['ledger_hash'])[:16]}, recorded by "
+        f"{sf['recorded_by']} [{sf['actor_kind'] or 'kind not recorded'}]"
+        if sf["ledger_seq"] is not None
+        else "ledger position not carried; see the audit history"
+    )
+    out = [
+        f'{indent}basis: {b["citation"]}' + (f': "{b["wording"]}"' if b["wording"] else ""),
+        f'{indent}counting {b["counting"]} · rule version {b["rule_version"]} · starts from '
+        f'{sf["fact"]} at {sf["at"]} ({where})',
+    ]
+    if b["also_required"]:
+        out.append(f'{indent}also required: {b["also_required"]}')
+    out.extend(f"{indent}not modelled: {n}" for n in b["not_modelled"])
+    if b["residual"]:
+        out.append(f'{indent}residual: {b["residual"]}')
+    for r in b["other_readings"]:
+        out.append(
+            f'{indent}other reading, information only, {r["status"]}: {r["id"]} would end '
+            f'{r["would_end_at"]}; it does not replace the due time above'
+        )
+    w = b["weekend_holiday_rule"]
+    out.append(f"{indent}weekend/holiday rule ({w['id']}): NOT applied. {w['note']}")
+    if b["status_note"]:
+        out.append(f'{indent}NOTE: {b["status_note"]}')
+    return out
 
 
 def case_report(case: Case, *, now: datetime | None = None) -> str:
@@ -128,8 +161,11 @@ def case_report(case: Case, *, now: datetime | None = None) -> str:
                 f"  {d.stage.label:26s} due {format_utc(d.due_at)}  {mark}{detail}"
             )
             out.append(f"  {'':26s} runs from {d.runs_from_fact} · {d.provision}")
+            out.extend(basis_lines(d, "      "))
         for gap in deadlines.pending_facts():
             out.append(f"  not computable: {gap}")
+        out += ["", "OPEN LEGAL QUESTIONS  —  not answered by this software; a qualified lawyer must decide"]
+        out.extend(f"  {q['id']}: {q['question']}" for q in OPEN_LEGAL_QUESTIONS)
 
         platform = deadlines.to_dict(reference).get("platform_counter")
         if platform and not platform["agrees"]:
@@ -173,6 +209,7 @@ def register_report(register: Art14Register, *, now: datetime | None = None) -> 
         f"  deadline breaches    {len(breaches)}",
         f"  unreadable cases     {len(unreadable)}",
         f"  field spec           ENISA CRA SRP Glossary v{GLOSSARY_VERSION} ({GLOSSARY_DATE})",
+        f"  clock rule version   {RULE_VERSION}",
     ]
 
     if not ok:
@@ -215,6 +252,8 @@ def readiness_report(register: Art14Register, *, now: datetime | None = None) ->
         "applicable_since": "2026-09-11",
         "legacy_products_in_scope": True,
         "legacy_basis": "Art. 69(3)",
+        "clock_rule_version": RULE_VERSION,
+        "open_legal_questions": [dict(q) for q in OPEN_LEGAL_QUESTIONS],
         "field_spec": {"source": "ENISA CRA SRP Glossary", "version": GLOSSARY_VERSION,
                        "dated": GLOSSARY_DATE},
         "ledger": {

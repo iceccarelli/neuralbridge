@@ -53,8 +53,10 @@ def _require_person(actor: Actor, what: str) -> None:
 
     A signal may be raised by monitoring (the bridge opens cases from advisories), but the
     legal moment of awareness, the reportability call, a submission and the closing of a case
-    each need a person who can be asked about it. An ``automation`` or ``service`` actor is
-    refused; nothing is recorded.
+    each need a person who can be asked about it, and so do the two records that start or
+    answer a duty (the availability of a measure, which starts the 14-day final-report clock,
+    and the notice to users). An ``automation`` or ``service`` actor is refused; nothing is
+    recorded.
     """
     if actor.kind != "person":
         raise CaseError(
@@ -199,6 +201,8 @@ class Case:
     filing_times: dict[str, list[datetime]] = None  # type: ignore[assignment]
     #: Decisions recorded (in a ledger written before this was enforced) by a non-person actor.
     non_person_records: list[str] = None  # type: ignore[assignment]
+    #: Ledger position of the measure record the 14-day clock runs from (the earliest one).
+    measure_source: dict[str, Any] | None = None
     #: Content hash of the awareness record that is currently in force.
     awareness_hash: str = ""
     #: Every awareness record in order (the original and each supersession), with which one is
@@ -253,7 +257,24 @@ class Case:
                 for stage, times in self.filing_times.items()
                 if len(set(times)) > 1
             },
+            sources=self._fact_sources(),
         )
+
+    def _fact_sources(self) -> dict[str, dict[str, Any]]:
+        """Where in the ledger the facts the deadlines run from were recorded, when known."""
+        sources: dict[str, dict[str, Any]] = {}
+        if self.awareness_history:
+            current = self.awareness_history[-1]   # the record in force is always the last one
+            kinds = {h["ledger_seq"]: h["actor_kind"] for h in self.history}
+            sources["awareness"] = {
+                "ledger_seq": current["ledger_seq"],
+                "content_hash": current["content_hash"],
+                "recorded_by": current["recorded_by"],
+                "actor_kind": kinds.get(current["ledger_seq"], ""),
+            }
+        if self.measure_source is not None:
+            sources["measure"] = dict(self.measure_source)
+        return sources
 
     @property
     def state(self) -> str:
@@ -401,7 +422,8 @@ class Case:
             )
         for note in self.non_person_records:
             out.append(
-                f"{note} Awareness, triage, filing and closure are human decisions; a person "
+                f"{note} Awareness, triage, filing, closure, the measure that starts the "
+                "final-report clock and the user notice are recorded by a person; a person "
                 "must confirm this record."
             )
         for f in self.uncounted_filings:
@@ -592,9 +614,11 @@ class Art14Register:
             confidence=Confidence.ESTABLISHED,
             checks_skipped=(
                 (
-                    "the reporting platform does not currently capture this fact for "
-                    "vulnerabilities, and records detection rather than awareness for incidents; "
-                    "this record is the compensating control"
+                    "the pinned platform field specification (Glossary v1.3) is older than the "
+                    "live glossary (v1.6, 21 October 2026), which lists an awareness field for "
+                    "both tracks; the field table has not been re-pinned and the platform has "
+                    "not been observed. This record is the evidence of the moment and of the "
+                    "reasoning either way"
                 ),
             ),
             expect_head=head,
@@ -808,7 +832,16 @@ class Art14Register:
         This starts the 14-day vulnerability final-report clock (Art. 14(2)(c)).
         A documented workaround starts it exactly as a patch does, which is why
         this is a separate act from shipping a release.
+
+        A named person records it (the same rule as awareness and a filing): this record starts
+        a legal clock, and the CRA does not define when a measure "is available", so someone
+        must be able to be asked what was judged to be available. Software may draft it.
         """
+        _require_person(
+            actor,
+            "recording that a corrective or mitigating measure is available "
+            "(it starts the Art. 14(2)(c) final-report clock)",
+        )
         case, head = self._load_for_write(case_id)
         if case.awareness is None:
             raise CaseError(f"case {case_id} has no awareness record")
@@ -936,7 +969,11 @@ class Art14Register:
         guidance is explicit that this is not an obligation to publish: it may
         be limited to the users concerned, particularly where publishing
         technical detail would itself increase risk.
+
+        A named person records it: that users were informed, to what scope and when, is a
+        statement the manufacturer answers for. Software may draft it.
         """
+        _require_person(actor, "recording that users were informed (Art. 14(8))")
         case, head = self._load_for_write(case_id)
         _require_open_case(case, case_id, "a user notification")
         _not_in_future(at, "user notification time", now or utc_now())
@@ -1001,6 +1038,11 @@ class Art14Register:
                 CASE_KIND["triage"],
                 CASE_KIND["non_report"],
                 CASE_KIND["filing"],
+                # The measure record starts the 14-day clock and the user notice answers
+                # Art. 14(8); both are person-gated now, so a non-person one is a legacy or
+                # hand-written record and is shown, not trusted.
+                "art14.measure",
+                CASE_KIND["user_notice"],
             ):
                 case.non_person_records.append(
                     f"ledger seq {entry.seq} ({kind}) was recorded by an actor of kind "
@@ -1041,6 +1083,12 @@ class Art14Register:
                 at = parse_utc(body["available_at"])
                 if case.measure_available_at is None or at < case.measure_available_at:
                     case.measure_available_at = at
+                    case.measure_source = {
+                        "ledger_seq": entry.seq,
+                        "content_hash": entry.content_hash,
+                        "recorded_by": _who(entry),
+                        "actor_kind": actor_kind,
+                    }
             elif kind == CASE_KIND["filing"]:
                 at = parse_utc(body["submitted_at"])
                 stage = body["stage"]

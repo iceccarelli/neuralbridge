@@ -18,8 +18,15 @@ Encoding the specification here does three things a checklist cannot:
 
 Source: ENISA, CRA SRP Glossary v1.3, 10 September 2026. That document is
 operational guidance rather than a legal instrument and has already changed
-version once; :data:`GLOSSARY_VERSION` is checked by the report so a stale
-build announces itself.
+version; :data:`GLOSSARY_VERSION` is printed by the report so a stale build
+announces itself.
+
+The pinned version is OLDER than the live glossary. On 2026-11-12 the page
+https://www.enisa.europa.eu/topics/product-security/single-reporting-platform-srp/cra-srp-glossary2
+showed v1.6 (last update 21 October 2026). This module has not been re-pinned: that needs a
+human to diff v1.3 against v1.6 (rows 7a and v26a of v1.6, for example, are not in
+:data:`FIELDS`) and decide what changes. Until then the field table, the required/optional
+pattern and the platform notes below describe v1.3 and may differ from the form.
 """
 
 from __future__ import annotations
@@ -141,7 +148,8 @@ FIELDS: tuple[FieldSpec, ...] = (
               "Read-only; generated from the registration."),
     FieldSpec("5", "member_states_available", "both", REQ, CAR, CAR, None,
               "The coordinating CSIRT's Member State is pre-filled; the rest must be added. "
-              "The only substantive content Art. 14(2)(a) requires at 24 hours."),
+              "Art. 14(2)(a) and 14(4)(a) ask for the Member States 'where applicable'; the "
+              "Glossary marks the field required for the early warning."),
     FieldSpec("6", "product_name", "both", REQ, CAR, CAR, 255),
     FieldSpec("7", "product_version", "both", REQ, CAR, CAR, 255),
     FieldSpec("8", "product_type", "both", OPT, CAR, CAR, None,
@@ -170,8 +178,13 @@ FIELDS: tuple[FieldSpec, ...] = (
     FieldSpec("v25", "vulnerability_impact", "vulnerability", OPT, OPT, REQ, 4000),
     FieldSpec("v26", "awareness_datetime", "vulnerability", REQ, CAR, CAR, None,
               "The fact every deadline runs from.",
-              platform_gap="Documented as arriving in a future release of the platform. "
-                           "Until then the manufacturer's own record is the only evidence."),
+              platform_gap="Written against Glossary v1.3 (pinned here), which this module "
+                           "described as not yet capturing awareness. The live Glossary v1.6 (21 "
+                           "October 2026; https://www.enisa.europa.eu/topics/product-security/single-reporting-platform-srp/cra-srp-glossary2; retrieved 2026-11-12) lists 'Date and time when "
+                           "you become aware of the Actively Exploited Vulnerability' as "
+                           "Mandatory, while its description still says 'first detected'. A human "
+                           "must diff v1.3 against v1.6 and re-pin. Keep the awareness record "
+                           "either way: it is the evidence of the moment and the reasoning."),
     FieldSpec("v27", "malicious_actor", "vulnerability", OPT, OPT, IFA, 100,
               "100 characters. Name the actor; the analysis does not fit and is not asked for."),
     FieldSpec("v28", "particular_exceptional_circumstances", "vulnerability", NAP, OPT, NAP, None,
@@ -189,9 +202,12 @@ FIELDS: tuple[FieldSpec, ...] = (
     FieldSpec("i36", "threat_type_or_root_cause", "incident", OPT, OPT, REQ, 255),
     FieldSpec("i37", "awareness_datetime", "incident", REQ, REQ, CAR, None,
               "The fact every deadline runs from.",
-              platform_gap="The platform currently labels this field 'Date and time when the "
-                           "incident was detected'. Detection is not awareness; enter the "
-                           "awareness time and keep the reasoning."),
+              platform_gap="Written against Glossary v1.3 (pinned here), which this module "
+                           "described as labelling the field 'detected'. The live Glossary v1.6 "
+                           "(21 October 2026; https://www.enisa.europa.eu/topics/product-security/single-reporting-platform-srp/cra-srp-glossary2; retrieved 2026-11-12) labels it 'Date and time "
+                           "when you become aware of the incident (UTC time)', Mandatory. A human "
+                           "must diff v1.3 against v1.6 and re-pin. Detection is not awareness: "
+                           "enter the awareness time and keep the reasoning."),
     FieldSpec("i38", "incident_occurred_datetime", "incident", OPT, REQ, OPT, None),
     FieldSpec("i39", "initial_assessment", "incident", OPT, REQ, CAR, 4000),
 )
@@ -381,6 +397,17 @@ def validate_payload(
     # under time pressure, and an empty list is the commonest cause of a
     # 24-hour filing that cannot be completed.
     states = payload.get("member_states_available")
+    if _has_content(states) and not isinstance(states, (list, tuple)):
+        issues.append(
+            PayloadIssue(
+                "5",
+                "member_states_available",
+                "blocking",
+                f"expected a list of ISO 3166-1 alpha-2 Member State codes such as ['DE', 'FR'], "
+                f"got {type(states).__name__}. A name or a comma-separated string is not read "
+                "and is not guessed at.",
+            )
+        )
     if isinstance(states, (list, tuple)):
         malformed = [s for s in states if not (isinstance(s, str) and len(s) == 2 and s.isalpha())]
         if malformed:
@@ -406,16 +433,17 @@ def validate_payload(
                 )
             )
         # "EL" is the EU institutions' own code for Greece; ISO 3166-1 alpha-2 (which this field
-        # is checked against) uses "GR". Say that. Nothing here claims what the platform expects.
+        # is checked against) uses "GR". It is read as Greece and said so, never accepted silently.
+        # Nothing here claims what the platform expects: its form lists Member States by name.
         if "EL" in codes:
             issues.append(
                 PayloadIssue(
                     "5",
                     "member_states_available",
-                    "blocking",
-                    "'EL' is the EU institutions' own code for Greece; this check uses ISO 3166-1 "
-                    "alpha-2, where Greece is 'GR'. Use 'GR'. Which code the reporting platform "
-                    "itself expects has not been checked.",
+                    "advisory",
+                    "'EL' is the EU institutions' own code for Greece and is read here as Greece; "
+                    "this check uses ISO 3166-1 alpha-2, where Greece is 'GR'. Prefer 'GR'. How "
+                    "the reporting platform itself takes Greece has not been checked.",
                 )
             )
         unknown = sorted(codes - EU_MEMBER_STATES - EEA_NON_EU - {"EL"})
@@ -432,17 +460,21 @@ def validate_payload(
                 )
             )
         already_flagged = any(
-            i.field_number == "5" and i.message.startswith("required at this stage")
-            for i in issues
+            i.field_number == "5" and i.severity == "blocking" for i in issues
         )
-        if not codes and not already_flagged:
+        if not (codes & (EU_MEMBER_STATES | {"EL"})) and not already_flagged:
             issues.append(
                 PayloadIssue(
                     "5",
                     "member_states_available",
                     "blocking",
-                    "no Member States listed. This is the only substantive content "
-                    "Art. 14(2)(a) requires at 24 hours.",
+                    "no EU Member State listed. Art. 14(2)(a) and 14(4)(a) ask for the Member "
+                    "States where the manufacturer is aware the product has been made available "
+                    "'where applicable', and the Glossary marks this field required for the "
+                    "early warning; EEA states that are not EU Member States do not fill it. "
+                    "Art. 14(4)(a) also requires the incident early warning to say whether the "
+                    "incident is suspected of being caused by unlawful or malicious acts "
+                    "(field i31).",
                 )
             )
     skipped.append(

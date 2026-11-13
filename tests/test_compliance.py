@@ -29,6 +29,19 @@ class TestCRAReport:
         assert readiness is not None
         assert "overall_status" in readiness or isinstance(readiness, dict)
 
+    def test_readiness_reports_an_application_date_not_a_deadline(self):
+        from datetime import UTC, datetime
+
+        from neuralbridge.compliance.cra_report import CRAReportGenerator
+
+        readiness = CRAReportGenerator().check_cra_readiness()
+        assert "cra_deadline" not in readiness and "days_to_deadline" not in readiness
+        applies = datetime.fromisoformat(str(readiness["art14_applies_from"]))
+        assert applies == datetime(2026, 9, 11, tzinfo=UTC)          # Art. 71(2); timezone-aware
+        elapsed = (datetime.now(UTC) - applies).days
+        assert readiness["days_since_applicable"] in (elapsed, elapsed - 1, elapsed + 1)
+        assert readiness["days_since_applicable"] > 0                  # applicable since 2026-09-11
+
 
 class TestSBOM:
     """Tests for the SBOM generator."""
