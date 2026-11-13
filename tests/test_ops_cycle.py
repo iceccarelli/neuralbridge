@@ -465,6 +465,24 @@ def test_status_fresh_ok_is_zero_and_stale_is_two(site, capsys):
     assert json.loads(out)["state"] == "stale"
 
 
+def test_a_cycle_dated_in_the_future_is_not_fresh(site, capsys):
+    """finished_at in 2027 read '(-9914h ago)' and exit 0 for as long as the clock was behind."""
+    _old_record(site, hours_ago=-24 * 365)
+    code, out = _status(site, capsys)
+    assert code == 2 and "STALE" in out and "FUTURE" in out
+    code, out = _status(site, capsys, "--json")
+    report = json.loads(out)
+    assert code == 2 and report["state"] == "stale" and report["age_hours"] < 0
+
+
+def test_a_few_minutes_of_clock_skew_is_still_fresh(site, capsys):
+    _old_record(site, hours_ago=-2 / 60)                 # two minutes ahead
+    assert _status(site, capsys)[0] == 0
+    site.record.unlink()
+    _old_record(site, hours_ago=-10 / 60)                # ten minutes ahead
+    assert _status(site, capsys)[0] == 2
+
+
 def test_status_mirrors_the_last_cycles_status(site, capsys):
     _old_record(site, hours_ago=1, status="flagged")
     assert _status(site, capsys)[0] == 1

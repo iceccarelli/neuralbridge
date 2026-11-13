@@ -36,6 +36,7 @@ from assurance.ops.config import OpsConfig, load_config
 __all__ = ["build_parser", "main"]
 
 EXIT_COULD_NOT_RUN = 2
+_CLOCK_SKEW_HOURS = 5 / 60          # same tolerance as `watch status` (CLOCK_SKEW_TOLERANCE)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -207,7 +208,11 @@ def _cmd_status(args: argparse.Namespace) -> int:
     else:
         last = got.cycles[-1]
         age = (now - parse_utc(last["finished_at"])) / timedelta(hours=1)
-        stale = age > cfg.max_cycle_age_hours
+        # A finish time ahead of this host's clock (beyond a few minutes of skew) is not a fresh
+        # cycle: it would read "fresh" until the clock caught up, however long ago the timer
+        # stopped. Judged like a stale one (exit 2), as `watch status` does.
+        future = age < -_CLOCK_SKEW_HOURS
+        stale = age > cfg.max_cycle_age_hours or future
         code = 2 if stale or last["status"] == "degraded" else (
             1 if last["status"] == "flagged" else 0)
         this, earlier = _actions_by_recency(got.cycles)
@@ -243,8 +248,11 @@ def _cmd_status(args: argparse.Namespace) -> int:
               f"{last['finished_at']} ({report['age_hours']}h ago; stale after "
               f"{cfg.max_cycle_age_hours:g}h)")
         if report["state"] == "stale":
-            print("  STALE: no cycle has finished within the allowed age. A timer that stopped "
-                  "looks exactly like a quiet fleet.")
+            print("  STALE: no cycle has finished within the allowed age"
+                  + (" (the last one is dated in the FUTURE of this host's clock: it cannot be "
+                     "called fresh; check the clock of the host that wrote it)"
+                     if report["age_hours"] < 0 else "")
+                  + ". A timer that stopped looks exactly like a quiet fleet.")
         for s in last["steps"]:
             print(f"  [{s['status']:<8}] {s['name']:<34} {neutralise(s['detail'])}")
         a = report["actions"]
