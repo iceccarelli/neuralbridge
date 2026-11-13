@@ -101,7 +101,7 @@ class TestAnIncompleteMachineIsNotSealedAsTheConfiguration:
                   if e.kind == MANIFEST_KIND]
         assert sealed == ["Acme Robotics/AR-7#AR7-1001"]
         statuses = {m["serial"]: m["status"] for m in run_record(out)["machines"]}
-        assert statuses == {"AR7-1001": "enrolled", "AR7-1002": "incomplete"}
+        assert statuses == {"AR7-1001": "recorded", "AR7-1002": "incomplete"}
 
     def test_seal_incomplete_seals_exactly_what_collect_run_would(self, tmp_path, capsys):
         """The flag has the meaning ``collect run --seal-incomplete`` has: the manifest is
@@ -469,3 +469,39 @@ class TestARunDoesNotAppendToABrokenChain:
         run_cli("run", str(kit), "--out", str(out))
         assert run_cli("run", str(kit), "--out", str(out)) == 0
         assert EvidenceLedger(out / "evidence.db").verify_chain()[0] is True
+
+
+# =====================================================================
+# "recorded" is not "enrolled".
+# =====================================================================
+class TestRecordedIsNotEnrolled:
+    def test_the_status_says_recorded_and_the_next_command_really_enrols(
+            self, tmp_path, capsys, monkeypatch):
+        import shlex
+
+        from assurance.collect.cli import main as collect_main
+        from assurance.machinery.cli import main as machinery_main
+
+        kit = make_kit(tmp_path)
+        out = tmp_path / "out"
+        assert run_cli("run", str(kit), "--out", str(out)) == 0
+        text = capsys.readouterr().out
+        assert "1/1 machine(s) recorded" in text
+        assert json.loads((out / "run.json").read_text())["machines"][0]["status"] == "recorded"
+        assert "recorded is not enrolled" in text
+
+        commands = [shlex.split(line.strip()) for line in text.splitlines()
+                    if line.strip().startswith("python -m assurance ")]
+        assert [c[3] for c in commands] == ["collect", "machinery"]
+        monkeypatch.chdir(tmp_path)
+
+        # Before: the machine is not enrolled, exactly as the integrator found out.
+        key = "Acme Robotics/AR-7#AR7-1001"
+        amend = ["amend-enrolment", "--ledger", str(out / "evidence.db"), "--machine", key,
+                 "--actor", "Jane Doe", "--reason", "site corrected", "--site", "Hall 2"]
+        assert machinery_main(amend) != 0
+
+        # The printed commands, verbatim, perform the real enrolment.
+        assert collect_main(commands[0][4:]) == 0
+        assert machinery_main(commands[1][4:]) == 0
+        assert machinery_main(amend) == 0

@@ -10,7 +10,7 @@ their network, and it is the first command they will ask for.
 
 Exit codes are the interface:
 
-    0  every machine enrolled, nothing tried to reach the network
+    0  every machine recorded, nothing tried to reach the network
     1  a finding — a machine incomplete, a required item missing, or a refused
        connection attempt. The run still produced evidence; read it.
     2  the kit could not run at all.
@@ -412,6 +412,31 @@ def _outcome_lines(o: ItemOutcome, indent: str = "      ") -> list[str]:
     return lines
 
 
+def _enrol_commands(config: KitConfig, run: Any, read_from_machine: bool) -> list[str]:
+    """The commands that turn a recorded machine into an enrolled one.
+
+    The kit seals each machine's manifest into the ledger; it does not enrol it. Enrolment is
+    a declaration by a named person (``machinery enrol``), and ``machinery amend-enrolment``
+    refuses a machine that has none. Two steps: write the manifest file with the same plan,
+    folder and identity the kit used (so the configuration is identical), then enrol it.
+    """
+    q = shlex.quote
+    lines: list[str] = []
+    for m in run.recorded:
+        entry = next(e for e in config.machines if e.serial == m.serial)
+        manifest = f"manifest-{entry.serial}.json"
+        lines.append(
+            f"python -m assurance collect run {q(str(config.resolve(entry.plan)))} "
+            f"--root {q(str(config.resolve(entry.exports)))} --serial {q(entry.serial)} "
+            f"--actor {q(config.prepared_by)} --site {q(config.site)} "
+            f"--country {q(config.country)} --year {q(entry.year)} --out {q(manifest)}"
+            + (" --read-from-machine" if read_from_machine else ""))
+        lines.append(
+            f"python -m assurance machinery enrol {q(manifest)} "
+            f"--ledger {q(run.ledger_path)} --actor {q(config.prepared_by)}")
+    return lines
+
+
 def _cmd_run(args: argparse.Namespace) -> int:
     config = KitConfig.from_json(args.config)
     run = run_kit(config, args.out, allow_loopback=args.allow_loopback,
@@ -440,6 +465,13 @@ def _cmd_run(args: argparse.Namespace) -> int:
                   "the ledger describes those machines; the attempt, with the items that "
                   "were not collected, is in the run record and the report. Fix the export "
                   "folder and run again, or pass --seal-incomplete to seal what was read.")
+        if run.recorded:
+            print("\n  recorded is not enrolled: the manifest is sealed in the ledger, but no "
+                  "enrolment\n  has been declared, so `machinery amend-enrolment` will say "
+                  "'not enrolled'. To enrol\n  (a named person's declaration; the kit does "
+                  "not make it for you), per machine:")
+            for line in _enrol_commands(config, run, args.read_from_machine):
+                print(f"\n    {line}")
         print(f"\n  airgap: {run.airgap.summary()}")
         for attempt in run.airgap.attempts:
             print(f"      ! {attempt.api} -> {attempt.target}  from {attempt.caller}")

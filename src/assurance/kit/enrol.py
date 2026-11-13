@@ -299,10 +299,15 @@ class KitConfig:
 
 @dataclass(frozen=True)
 class MachineResult:
-    """What happened to one machine. ``enrolled`` is not the only good outcome."""
+    """What happened to one machine. ``recorded`` is not the only good outcome.
+
+    ``recorded`` means the machine's manifest is sealed in this kit's ledger. It does not mean
+    enrolled: that is ``assurance machinery enrol``, a named person's declaration
+    (:func:`~assurance.machinery.enrol.enrol_machine`), which the kit never makes for them.
+    """
 
     serial: str
-    status: str            # enrolled | incomplete | failed
+    status: str            # recorded | incomplete | failed
     items: int = 0
     configuration_hash: str = ""
     plan_id: str = ""
@@ -351,8 +356,13 @@ class KitRun:
     read_from_machine_asserted: bool = False
 
     @property
+    def recorded(self) -> tuple[MachineResult, ...]:
+        return tuple(m for m in self.machines if m.status == "recorded")
+
+    @property
     def enrolled(self) -> tuple[MachineResult, ...]:
-        return tuple(m for m in self.machines if m.status == "enrolled")
+        """Alias of :attr:`recorded`, kept for callers written before the rename."""
+        return self.recorded
 
     @property
     def verdict(self) -> str:
@@ -363,12 +373,12 @@ class KitRun:
         every run that will ever happen, so letting it force PARTIAL every time
         would teach the reader that the verdict means nothing, which is how a
         signal is destroyed. It belongs in what-was-not-checked, and that is
-        where it goes. What moves the verdict is a machine that did not enrol,
+        where it goes. What moves the verdict is a machine that was not recorded,
         a required item that was not found, or a connection attempt.
         """
-        if not self.enrolled:
+        if not self.recorded:
             return "failed"
-        if len(self.enrolled) != len(self.machines):
+        if len(self.recorded) != len(self.machines):
             return "partial"
         if not self.airgap.held:
             return "partial"
@@ -376,8 +386,8 @@ class KitRun:
 
     def summary(self) -> str:
         return (
-            f"{self.kit_id} — {len(self.enrolled)}/{len(self.machines)} machine(s) "
-            f"enrolled — {self.verdict.upper()}"
+            f"{self.kit_id} — {len(self.recorded)}/{len(self.machines)} machine(s) "
+            f"recorded — {self.verdict.upper()}"
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -592,7 +602,7 @@ def _enrol_one(
     if result.complete:
         record_manifest(ledger, result.manifest, actor=config.actor)
         return MachineResult(
-            status="enrolled", sealed=True, configuration_hash=sealed_hash,
+            status="recorded", sealed=True, configuration_hash=sealed_hash,
             detail=result.summary().splitlines()[0] if result.summary() else "", **common)
 
     # An incomplete collection is a first-class outcome, but it is not THE configuration of
