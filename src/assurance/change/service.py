@@ -154,6 +154,53 @@ def advisory_case_id(impact: ImpactReport) -> str:
     return _case_id(TriggerType.SUPPLIER_ADVISORY, _advisory_trigger(impact))
 
 
+def _advisory_link_note(impact: ImpactReport) -> str:
+    """The note the case's ``concerns`` link to this advisory carries (see :func:`assess_advisory`)."""
+    return f"advisory {neutralise(impact.advisory_id)} from {neutralise(impact.issued_by)}"
+
+
+def _advisory_links(case: ChangeAssuranceCase) -> list[dict[str, str]]:
+    return [r for r in case.linked_evidence
+            if r.get("relation") == "concerns" and r.get("note", "").startswith("advisory ")]
+
+
+def _concerns_issuer(case: ChangeAssuranceCase, impact: ImpactReport) -> bool:
+    """Is ``case`` about this advisory's issuer (or this very document)?
+
+    A case that records no advisory link at all (it should not exist) is treated as the
+    same lineage, so the ids and the folding of what is already in a ledger do not move.
+    """
+    links = _advisory_links(case)
+    if not links:
+        return True
+    note = _advisory_link_note(impact)
+    return any(r.get("content_hash") == impact.advisory_hash
+               or r.get("note", "") in (note, f"{note} (unsigned CSAF import)")
+               for r in links)
+
+
+def _advisory_identity(store: CaseStore, impact: ImpactReport) -> tuple[str, str]:
+    """``(case id, trigger id)`` for this advisory report in this ledger.
+
+    A non-import advisory has always been keyed by its id alone, and those ids must not
+    move. But an id does not name a supplier: a second supplier's advisory that reuses an id
+    already held by a case about someone else's advisory (closed, rejected, deferred or
+    open) is a different advisory and gets its own case, named by its issuer. Which of the
+    two a report maps to is fixed by the ledger (the case that holds the plain id is the one
+    about its issuer), so assessing either again finds the same case and duplicates nothing.
+    An import's trigger already names its publisher.
+    """
+    trigger = _advisory_trigger(impact)
+    legacy = _case_id(TriggerType.SUPPLIER_ADVISORY, trigger)
+    if impact.advisory_import is not None:
+        return legacy, trigger
+    holder = store.get(legacy)
+    if holder is None or _concerns_issuer(holder, impact):
+        return legacy, trigger
+    own = f"{trigger} [advisory from {neutralise(impact.issued_by)}]"
+    return _case_id(TriggerType.SUPPLIER_ADVISORY, own), own
+
+
 def _name_problem(name: str) -> str:
     """Why ``name`` cannot be the name of a person, or ``""`` if it can (the shared rule)."""
     return actor_name_problem(name)
@@ -448,6 +495,16 @@ def _recurrence(
         if extra:
             return ("the advisory now reaches machine(s) the "
                     f"{settled.status.value} case did not name: " + ", ".join(extra))
+        # The same supplier re-issued the id with different content: the person who settled
+        # the case did not decide on this document. (The SAME document, assessed again, is
+        # not a recurrence. An import is skipped: its text churns without the substance.)
+        old = {r.get("content_hash") for r in _advisory_links(settled)}
+        fresh = [r for r in _advisory_links(new)
+                 if not r.get("note", "").endswith("(unsigned CSAF import)")]
+        if old and fresh and not any(r.get("content_hash") in old for r in fresh):
+            return (f"the {settled.status.value} case was decided on a different document: "
+                    f"{fresh[0].get('note', 'advisory')} now has content "
+                    f"{fresh[0].get('content_hash', '')[:12]}")
     return ""
 
 
@@ -909,10 +966,11 @@ def assess_advisory(
             required_actions.append(action)
             actions_by_fid.setdefault(key, []).append(action)
 
+    case_id, trigger_id = _advisory_identity(store, impact)
     case = ChangeAssuranceCase(
-        case_id=advisory_case_id(impact),
+        case_id=case_id,
         trigger_type=TriggerType.SUPPLIER_ADVISORY,
-        trigger_id=_advisory_trigger(impact),
+        trigger_id=trigger_id,
         status=CaseStatus.OPEN,
         machines=impact.machines_affected,
         sites=tuple(dict.fromkeys(e.site for e in impact.exposures if e.site)),

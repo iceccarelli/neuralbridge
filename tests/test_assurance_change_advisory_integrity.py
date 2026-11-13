@@ -260,3 +260,72 @@ def close_it(store, case_id):
             resolve_decision(store, case_id, decision=q, resolution="seen", actor=DECIDER)
         advance(store, case_id, actor=DECIDER)
     return decide(store, case_id, disposition="closed", reason="done", actor=DECIDER)
+
+
+class TestAReusedAdvisoryIdIsNotTheClosedCase:
+    def test_a_second_suppliers_advisory_with_the_same_id_opens_its_own_case(
+            self, ledger, store):
+        cc, sc = two_suppliers_one_id(ledger)
+        first = assess_advisory(store, impact_of(ledger, cc), actor=PERSON)
+        closed = close_it(store, first.case_id)
+        assert closed.status is CaseStatus.CLOSED
+
+        second = assess_advisory(store, impact_of(ledger, sc), actor=PERSON)
+        assert second.case_id != first.case_id
+        assert second.status is CaseStatus.OPEN                  # was [CLOSED], swallowed
+        assert second.machines == ("Grimaldi/AR-7#0412",)
+        assert store.get(first.case_id).status is CaseStatus.CLOSED   # untouched
+        assert [c.case_id for c in store.list() if c.is_open] == [second.case_id]
+        assert "ScanCo" in second.trigger_id
+        assert reconstruct_case(ledger, second.case_id).ok
+        assert reconstruct_case(ledger, first.case_id).ok
+
+    def test_the_case_id_of_the_first_advisory_is_the_one_it_always_had(self, ledger, store):
+        from assurance.change.service import advisory_case_id
+        cc, _ = two_suppliers_one_id(ledger)
+        impact = impact_of(ledger, cc)
+        assert assess_advisory(store, impact, actor=PERSON).case_id == advisory_case_id(impact)
+
+    def test_assessing_either_advisory_again_duplicates_nothing(self, ledger, store):
+        cc, sc = two_suppliers_one_id(ledger)
+        first = assess_advisory(store, impact_of(ledger, cc), actor=PERSON)
+        close_it(store, first.case_id)
+        second = assess_advisory(store, impact_of(ledger, sc), actor=PERSON)
+        before = len(ledger)
+        for _ in range(2):
+            a = assess_advisory(store, impact_of(ledger, cc), actor=BOT)
+            b = assess_advisory(store, impact_of(ledger, sc), actor=BOT)
+            assert a.case_id == first.case_id and a.status is CaseStatus.CLOSED
+            assert b.case_id == second.case_id and b.status is CaseStatus.OPEN
+        assert len(ledger) == before
+        assert len(store.list()) == 2
+
+    def test_an_open_case_is_not_the_other_suppliers_case_either(self, ledger, store):
+        cc, sc = two_suppliers_one_id(ledger)
+        first = assess_advisory(store, impact_of(ledger, cc), actor=PERSON)
+        second = assess_advisory(store, impact_of(ledger, sc), actor=PERSON)
+        assert first.case_id != second.case_id
+        assert store.get(first.case_id).machines == ("Grimaldi/AR-7#0412",)
+        # the first case still concerns only its own advisory
+        assert len(store.get(first.case_id).linked_evidence) == 1
+
+    def test_the_same_supplier_re_issuing_the_id_with_new_content_reopens_a_closed_case(
+            self, ledger, store):
+        cc, _ = two_suppliers_one_id(ledger)
+        first = assess_advisory(store, impact_of(ledger, cc), actor=PERSON)
+        close_it(store, first.case_id)
+        reissued = advisory(advisory_id="SA-1", title="Watchdog may not trip (revised)",
+                            remedy="Update to 3.9.1 instead.")
+        assert reissued.content_hash() != cc.content_hash()
+        again = assess_advisory(store, impact_of(ledger, reissued), actor=PERSON)
+        assert again.case_id == first.case_id
+        assert again.status is CaseStatus.OPEN
+        assert "different document" in again.prior_closures[-1]["reopened_because"]
+
+    def test_the_same_document_assessed_again_does_not_reopen_it(self, ledger, store):
+        cc, _ = two_suppliers_one_id(ledger)
+        first = assess_advisory(store, impact_of(ledger, cc), actor=PERSON)
+        close_it(store, first.case_id)
+        before = len(ledger)
+        again = assess_advisory(store, impact_of(ledger, cc), actor=BOT)
+        assert again.status is CaseStatus.CLOSED and len(ledger) == before
