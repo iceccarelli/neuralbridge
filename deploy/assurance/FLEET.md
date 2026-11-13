@@ -113,26 +113,18 @@ It is counted in **neither** column. Not affected, not clear.
 Names and version labels are compared as the same string in different dress:
 Unicode compatibility-normalised, case-folded, whitespace collapsed — so a composed
 and a decomposed `ü`, `ß` and `SS`, or a trailing tab from a spreadsheet, match.
-That is identity, not similarity: `ControlCo` and `Control Co GmbH` do not match.
-Hashes are compared as whole values, case-insensitively, never by prefix. Only a
-hash **read from the machine** counts: one from a vendor file or typed in says what
-should be there, so the label decides. When an advisory lists several entries for a
-component, the strongest basis any of them supports wins (hash, then
-hash_mismatch, then version, then name_only), so the order the supplier listed
-them in cannot change the answer. An item that records no supplier but carries the
-advisory's component name is `name_only`: neither affected nor clear.
-
-A fleet read from a ledger whose chain does not verify is never `clear`: records
-may have been dropped, so the report is `needs_review`. A report over an empty
-fleet says no machine was assessed.
-
-Names and version labels are compared as the same string in different dress:
-Unicode compatibility-normalised, case-folded, whitespace collapsed — so a composed
-and a decomposed `ü`, `ß` and `SS`, or a trailing tab from a spreadsheet, match.
-That is identity, not similarity: `ControlCo` and `Control Co GmbH` do not match.
-Hashes are compared as whole values, case-insensitively, never by prefix. Only a
-hash **read from the machine** counts: one from a vendor file or typed in says what
-should be there, so the label decides. When an advisory lists several entries for a
+That is identity, not similarity: `ControlCo` and `Control Co GmbH` do not match
+**as labels**. Hashes are compared as whole values, case-insensitively, never by prefix,
+and **before** any name is compared: an artefact whose hash is one the advisory lists as
+affected is the same artefact whatever supplier or component name a person typed
+(a re-badged or white-labelled copy of affected firmware is affected), so it is never
+clear because of a spelling. If the hash was read from the machine the basis is `hash`
+(confirmed) and the detail names both spellings for someone to reconcile. A hash that was
+not read from the machine (a vendor file, or typed in) never confirms anything, but where it
+equals an affected hash and nothing stronger matched the result is `name_only`, so a person
+looks; a different supplier with a *different* artefact still does not match. Only a
+hash **read from the machine** confirms: one from a vendor file or typed in says what
+should be there, so otherwise the label decides. When an advisory lists several entries for a
 component, the strongest basis any of them supports wins (hash, then
 hash_mismatch, then version, then name_only), so the order the supplier listed
 them in cannot change the answer. An item that records no supplier but carries the
