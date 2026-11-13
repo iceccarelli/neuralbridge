@@ -309,3 +309,34 @@ class TestCommandLine:
                             "--received-by", "a.integrator", "--json"]) == 0
         draft = json.loads(capsys.readouterr().out)
         assert draft["member_states"] == ["DE", "IT"]
+
+
+class TestAPlaceholderIsNeverAHashMatch:
+    """``n/a`` beside ``n/a`` used to be ``hash`` (confirmed) for the same supplier, while the
+    cross-component pass and the CSAF matcher required a real SHA-256 digest."""
+
+    @pytest.mark.parametrize("junk", ["n/a", "abc", "0" * 12, "unknown"])
+    def test_equal_placeholders_for_the_same_component_are_a_human_question_not_a_hash(
+            self, junk):
+        adv = advisory(AffectedArtefact("ControlCo", "Safety controller firmware",
+                                        versions=("3.8.2",), content_hashes=(junk,)))
+        for version in ("3.8.2", "9.9.9", ""):
+            m = match_item(adv, item(supplier="ControlCo", content_hash=junk, version=version))
+            assert m is not None, "an equal placeholder is never a clear"
+            assert m[0] is not MatchBasis.HASH
+        basis, detail = match_item(adv, item(supplier="ControlCo", content_hash=junk,
+                                             version="9.9.9"))
+        assert basis is MatchBasis.NAME_ONLY and basis.needs_a_human
+        assert "not a SHA-256 digest" in detail
+
+    def test_a_placeholder_advisory_hash_never_confirms_a_real_one(self):
+        adv = advisory(AffectedArtefact("ControlCo", "Safety controller firmware",
+                                        versions=("3.8.2",), content_hashes=("n/a", AFFECTED)))
+        assert match_item(adv, item(supplier="ControlCo"))[0] is MatchBasis.HASH
+        assert match_item(adv, item(supplier="ControlCo", content_hash="n/a",
+                                    version="9.9.9"))[0] is MatchBasis.NAME_ONLY
+
+    def test_a_placeholder_in_the_fixed_list_never_clears(self):
+        adv = advisory(fixed_hashes=("n/a",))
+        m = match_item(adv, item(supplier="ControlCo", content_hash="n/a", version="3.8.2"))
+        assert m is not None

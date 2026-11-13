@@ -476,8 +476,10 @@ def _match_artefact(
         return None
 
     versions = {fold_text(v) for v in artefact.versions}
-    affected_hashes = {fold_hash(h) for h in artefact.content_hashes}
-    fixed_hashes = {fold_hash(h) for h in advisory.fixed_hashes}
+    # Only a real SHA-256 digest is a hash: a placeholder ("n/a", "0", a truncated value)
+    # equal on both sides is not byte-identity (match_item holds it at name_only instead).
+    affected_hashes = {d for h in artefact.content_hashes if (d := _digest(h))}
+    fixed_hashes = {d for h in advisory.fixed_hashes if (d := _digest(h))}
     fixed_versions = {fold_text(v) for v in advisory.fixed_versions}
     own_fixed = {fold_text(v) for v in artefact.fixed_versions}
     label = fold_text(item.version)
@@ -486,12 +488,16 @@ def _match_artefact(
     # machine. One computed from a vendor's download, or typed in, says what
     # should be here, not what is.
     recorded = fold_hash(item.content_hash)
-    machine_hash = recorded if item.hash_source.describes_this_unit else ""
-    set_aside = (
-        f" The hash recorded for it ({recorded[:12]}, {item.hash_source.value}) was "
-        "not read from this machine, so it was not compared."
-        if recorded and not machine_hash else ""
-    )
+    digest = _digest(item.content_hash)
+    machine_hash = digest if item.hash_source.describes_this_unit else ""
+    if recorded and not digest:
+        set_aside = (f" The hash recorded for it ({recorded[:12]!r}) is not a SHA-256 "
+                     "digest, so it was not compared.")
+    elif digest and not machine_hash:
+        set_aside = (f" The hash recorded for it ({recorded[:12]}, {item.hash_source.value}) "
+                     "was not read from this machine, so it was not compared.")
+    else:
+        set_aside = ""
 
     if machine_hash and machine_hash in affected_hashes:
         return MatchBasis.HASH, (
@@ -681,6 +687,29 @@ def _hash_first(
     )
 
 
+def _placeholder_pair(
+    advisory: ComponentAdvisory, item: SafetyItem,
+) -> tuple[MatchBasis, str] | None:
+    """The item's recorded "hash" and one the advisory lists for its component are the same
+    string and neither is a SHA-256 digest (``n/a`` beside ``n/a``).
+
+    Equal placeholders are not byte-identity, so this is never ``hash``; but it is not a
+    reason to clear either. A person looks.
+    """
+    recorded = fold_hash(item.content_hash)
+    if not recorded or _digest(item.content_hash):
+        return None
+    for artefact in _entries_named(advisory, item.name):
+        if _same_component(artefact, item) and recorded in {
+                fold_hash(h) for h in artefact.content_hashes}:
+            return MatchBasis.NAME_ONLY, (
+                f"the hash recorded for this item and one {advisory.issued_by} lists for "
+                f"{artefact.supplier} {artefact.name} are both {recorded[:12]!r}, which is "
+                "not a SHA-256 digest, so they say nothing about the artefact. Somebody "
+                "has to look.")
+    return None
+
+
 def match_item(
     advisory: ComponentAdvisory, item: SafetyItem,
 ) -> tuple[MatchBasis, str] | None:
@@ -707,4 +736,7 @@ def match_item(
             continue
         if best is None or _PRIORITY[found[0]] < _PRIORITY[best[0]]:
             best = found
-    return _hash_first(advisory, item, best)
+    best = _hash_first(advisory, item, best)
+    if best is None:
+        best = _placeholder_pair(advisory, item)
+    return best
