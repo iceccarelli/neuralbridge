@@ -114,6 +114,9 @@ ENGINE_VERSION = "7"
 #: The engine that first states, in the result, that a sensed closing speed replaced the declared one.
 _FIRST_ENGINE_DISCLOSING_SENSED_SPEED = 7
 
+#: Text common to every sensed-closing-speed limitation, so a checker can find it.
+SENSED_SPEED_MARKER = "the closing speed the trace itself reports"
+
 #: The oldest engine this build can still RUN. A bundle names the engine that sealed it, and
 #: the checker re-runs that engine, not the newest one: a re-run under different rules is not
 #: a reproduction. Engines before this one are recognised (``is_known_engine``) but their sets
@@ -630,8 +633,8 @@ def _ssm_separation(
         fallback = envelope.approach_speed_mm_s
         below = sum(1 for v in sensed_speeds if v < fallback)
         caveats.append(
-            f"{len(sensed_speeds)} of {examined} compared samples used the closing speed "
-            "the trace itself reports (human_speed) in place of the envelope's "
+            f"{len(sensed_speeds)} of {examined} compared samples used {SENSED_SPEED_MARKER} "
+            "(human_speed) in place of the envelope's "
             f"{'declared' if envelope.approach_speed_declared else 'default'} "
             f"{fallback:.0f} mm/s. The lowest reported value was {min(sensed_speeds):g} "
             f"mm/s, and {below} of those samples reported less than {fallback:.0f} "

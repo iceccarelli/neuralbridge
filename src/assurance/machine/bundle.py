@@ -68,6 +68,7 @@ from assurance.machine.trace import (
 from assurance.machine.verify import (
     ENGINE_VERSION,
     OLDEST_RUNNABLE_ENGINE,
+    SENSED_SPEED_MARKER,
     Verdict,
     VerificationResult,
     is_known_engine,
@@ -1096,6 +1097,22 @@ def check_bundle_data(
                 replay_problems = _replay_differences(
                     replay, evidence, envelope, trace, limits)
                 problems.extend(replay_problems)
+                if not replay_problems and replay.engine_version != ENGINE_VERSION:
+                    # What the newest engine would have said about the same run. The verdict
+                    # and tier are those of the sealing engine; this is only disclosure.
+                    try:
+                        newest = verify(
+                            envelope, trace, limits=limits,
+                            limits_reviews=_recorded_reviews(body),
+                            review_trust=review_trust,
+                            recorder_attestations=_recorded_attestations(body),
+                            recorder_trust=recorder_trust, machine_serial=serial, now=as_of)
+                    except AssuranceError:
+                        pass
+                    else:
+                        limitations.extend(
+                            f"NOTE (engine {ENGINE_VERSION} would also have said): {c}"
+                            for c in newest.checks_skipped if SENSED_SPEED_MARKER in c)
                 replay_assessment = replay.provenance_assessment or {}
                 if (claims_attested and replay.provenance_basis == _ATTESTED
                         and replay_assessment.get("attestation_hash")
@@ -1140,6 +1157,16 @@ def check_bundle_data(
             "re-running with the recorder trust list you supplied does not reproduce "
             "provenance_basis 'recorder_attested' for the attestation the bundle records.")
 
+    sealing_engine = parse_engine_version(body.get("engine_version"))
+    if (sealing_engine is not None and sealing_engine < int(ENGINE_VERSION)
+            and is_runnable_engine(body.get("engine_version"))):
+        limitations.insert(0, (
+            f"NOT CHECKED: the bundle was sealed by engine {body.get('engine_version')!r}, "
+            f"which predates the boundary block and the sensed-closing-speed disclosure of "
+            f"engine {ENGINE_VERSION}: nothing in it says what was not tested, or whether a "
+            "closing speed the trace reported replaced the declared one. Verdict and tier are "
+            "those of the sealing engine. Supply the original envelope and trace to see what "
+            "the current engine would add, or re-verify with the current engine."))
     ok = not problems
     reproduced = ok and replayed
     if reproduced:
