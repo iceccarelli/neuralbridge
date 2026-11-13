@@ -41,7 +41,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from ..collect.collector import ItemOutcome, collect
+from ..collect.collector import CollectionResult, ItemOutcome, collect
 from ..collect.plan import CollectionPlan
 from ..core.actor_names import actor_grammar_problem, declared_role_problem
 from ..core.errors import AssuranceError
@@ -56,6 +56,7 @@ from .airgap import AIRGAP_LIMITS, AirgapResult, no_network
 __all__ = [
     "describe_placeholders",
     "find_placeholders",
+    "inspect_machine",
     "AIRGAP_KIND",
     "KIT_RUN_KIND",
     "KitConfig",
@@ -454,44 +455,34 @@ def starter_config(kit_id: str = "site-kit") -> dict[str, Any]:
     }
 
 
-def _enrol_one(
-    entry: MachineEntry,
-    config: KitConfig,
-    ledger: EvidenceLedger,
-    taken_at: datetime | None,
-    read_from_machine: bool = False,
-    seal_incomplete: bool = False,
-) -> MachineResult:
+def _prepare(
+    entry: MachineEntry, config: KitConfig,
+) -> tuple[CollectionPlan | None, Path, MachineResult | None]:
+    """The plan and the export folder for one machine, or why it cannot be collected."""
     plan_path = config.resolve(entry.plan)
     exports = config.resolve(entry.exports)
 
     if not plan_path.exists():
-        return MachineResult(
+        return None, exports, MachineResult(
             serial=entry.serial, status="failed",
             detail=f"plan {plan_path} does not exist")
     if not exports.is_dir():
-        return MachineResult(
+        return None, exports, MachineResult(
             serial=entry.serial, status="failed",
             detail=f"export folder {exports} does not exist")
-
     try:
         plan = CollectionPlan.from_json(plan_path)
     except AssuranceError as exc:
-        return MachineResult(
+        return None, exports, MachineResult(
             serial=entry.serial, status="failed",
             detail=f"plan {plan_path.name} is unusable: {exc}")
+    return plan, exports, None
 
-    for label, value in (("manufacturer", plan.manufacturer), ("model", plan.model)):
-        if _is_placeholder(value):
-            return MachineResult(
-                serial=entry.serial, status="failed", plan_id=plan.plan_id,
-                detail=(
-                    f"plan {plan_path.name} still says {label}={value!r}. The "
-                    "manufacturer and model are the machine's identity; a "
-                    "manifest carrying a template value describes nothing and "
-                    "cannot be matched to a supplier advisory later."
-                ))
 
+def _collect(
+    entry: MachineEntry, config: KitConfig, plan: CollectionPlan, exports: Path,
+    taken_at: datetime | None, read_from_machine: bool,
+) -> tuple[CollectionResult | None, MachineResult | None]:
     try:
         result = collect(
             plan, exports,
@@ -507,9 +498,56 @@ def _enrol_one(
             else HashSource.SUPPLIED_BY_VENDOR,
         )
     except AssuranceError as exc:
-        return MachineResult(
-            serial=entry.serial, status="failed",
-            plan_id=plan.plan_id, detail=str(exc))
+        return None, MachineResult(
+            serial=entry.serial, status="failed", plan_id=plan.plan_id, detail=str(exc))
+    return result, None
+
+
+def inspect_machine(
+    entry: MachineEntry, config: KitConfig,
+) -> tuple[CollectionPlan | None, CollectionResult | None, MachineResult | None]:
+    """What ``run`` would read for one machine, read-only: no ledger, no sealing, no output.
+
+    The same preparation and the same :func:`~assurance.collect.collector.collect` call
+    ``run`` makes, so ``check`` cannot say "ready" about a file ``run`` then cannot read.
+    The third element is the failure, when the machine cannot even be collected.
+    """
+    plan, exports, failed = _prepare(entry, config)
+    if plan is None:
+        return None, None, failed
+    result, failed = _collect(entry, config, plan, exports, None, False)
+    return plan, result, failed
+
+
+def _enrol_one(
+    entry: MachineEntry,
+    config: KitConfig,
+    ledger: EvidenceLedger,
+    taken_at: datetime | None,
+    read_from_machine: bool = False,
+    seal_incomplete: bool = False,
+) -> MachineResult:
+    plan, exports, failed = _prepare(entry, config)
+    if plan is None:
+        assert failed is not None
+        return failed
+    plan_path = config.resolve(entry.plan)
+
+    for label, value in (("manufacturer", plan.manufacturer), ("model", plan.model)):
+        if _is_placeholder(value):
+            return MachineResult(
+                serial=entry.serial, status="failed", plan_id=plan.plan_id,
+                detail=(
+                    f"plan {plan_path.name} still says {label}={value!r}. The "
+                    "manufacturer and model are the machine's identity; a "
+                    "manifest carrying a template value describes nothing and "
+                    "cannot be matched to a supplier advisory later."
+                ))
+
+    result, failed = _collect(entry, config, plan, exports, taken_at, read_from_machine)
+    if result is None:
+        assert failed is not None
+        return failed
 
     template_suppliers = sorted(
         {i.item_id for i in plan.items if _is_placeholder(i.supplier)})

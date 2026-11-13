@@ -23,19 +23,21 @@ from __future__ import annotations
 
 import argparse
 import json
+import shlex
 import sys
 import textwrap
 from pathlib import Path
 from typing import Any
 
 from assurance.collect.collector import ItemOutcome
-from assurance.collect.plan import CollectionPlan
 from assurance.core.errors import AssuranceError
+from assurance.kit.airgap import no_network
 from assurance.kit.enrol import (
     KitConfig,
     KitError,
     describe_placeholders,
     find_placeholders,
+    inspect_machine,
     run_kit,
     starter_config,
 )
@@ -245,14 +247,64 @@ def _cmd_init(args: argparse.Namespace) -> int:
     return 0
 
 
-def _cmd_check(args: argparse.Namespace) -> int:
-    """What a run would read, and whether the files the plan names are there.
+def _check_machine(entry: Any, config: KitConfig, placeholders: list[dict[str, str]]
+                   ) -> tuple[dict[str, Any], list[ItemOutcome], dict[str, Any]]:
+    """Read one machine exactly as ``run`` would, and say what would go wrong.
 
-    The useful question is not "is the export folder empty" — it is "does every
-    item this plan declares actually resolve to a file". An item that does not
-    is left out of the manifest entirely, and a manifest silently missing an
-    item is the failure mode this whole package exists to prevent. Better to
-    find it here, before the engineer walks away thinking they are done.
+    Returns the row, the item outcomes and each item's plan spec (for printing). Nothing is
+    sealed or written: this is :func:`~assurance.kit.enrol.inspect_machine`.
+    """
+    row: dict[str, Any] = {
+        "serial": entry.serial,
+        "plan": str(config.resolve(entry.plan)),
+        "exports": str(config.resolve(entry.exports)),
+        "ready": False,
+        "items": [],
+        "problem": "",
+    }
+    plan, result, failed = inspect_machine(entry, config)
+    problems: list[str] = []
+    specs: dict[str, Any] = {}
+    outcomes: list[ItemOutcome] = []
+    if failed is not None:
+        problems.append(failed.detail)
+    if plan is not None:
+        row["plan_id"] = plan.plan_id
+        specs = {i.item_id: i for i in plan.items}
+        in_plan = [p for p in placeholders if p["file"] == entry.plan]
+        if in_plan:
+            problems.append(" ".join(describe_placeholders(in_plan)))
+    if result is not None:
+        outcomes = list(result.outcomes)
+        for o in outcomes:
+            spec = specs[o.item_id]
+            row["items"].append({
+                "item_id": o.item_id, "source": spec.source, "found": list(o.files),
+                "required": spec.required, "status": o.status, "digest": o.digest,
+                "version": o.version, "warnings": list(o.warnings), "detail": o.detail,
+            })
+        missing = [o for o in outcomes if o.status == "missing"]
+        unreadable = [o for o in outcomes if o.status == "unreadable"]
+        if missing:
+            problems.append(f"{len(missing)} of {len(outcomes)} item(s) match no file in the "
+                            "export folder")
+        if unreadable:
+            problems.append(f"{len(unreadable)} of {len(outcomes)} item(s) could not be read "
+                            f"({', '.join(o.item_id for o in unreadable)})")
+    row["problem"] = "; ".join(filter(None, problems))
+    row["ready"] = not row["problem"]
+    return row, outcomes, specs
+
+
+def _cmd_check(args: argparse.Namespace) -> int:
+    """What a run would read, item by item, and whether it would work. Writes nothing.
+
+    The useful question is not "is the export folder empty" and not "does a glob match" — a
+    file that matches and cannot be read (not UTF-8 under a text rule, not a zip, a link out
+    of the folder) passed the old check and failed the run. So this makes the same read-only
+    :func:`~assurance.collect.collector.collect` call per machine that ``run`` makes, under
+    the same socket guard, and reports each item: its digest, its version or that it is
+    unknown, its warnings, or why it would fail. It seals nothing and creates nothing.
     """
     placeholders = find_placeholders(args.config)
     try:
@@ -275,72 +327,42 @@ def _cmd_check(args: argparse.Namespace) -> int:
             print("Fill them in, then run check again.", file=sys.stderr)
         return 2
     rows: list[dict[str, Any]] = []
-    problems = 0
-
-    for entry in config.machines:
-        plan_path = config.resolve(entry.plan)
-        exports = config.resolve(entry.exports)
-        row: dict[str, Any] = {
-            "serial": entry.serial,
-            "plan": str(plan_path),
-            "exports": str(exports),
-            "ready": False,
-            "items": [],
-            "problem": "",
-        }
-        if not plan_path.exists():
-            row["problem"] = "plan does not exist"
-        elif not exports.is_dir():
-            row["problem"] = "export folder does not exist"
-        else:
-            try:
-                plan = CollectionPlan.from_json(plan_path)
-            except AssuranceError as exc:
-                row["problem"] = f"plan is unusable: {exc}"
-            else:
-                row["plan_id"] = plan.plan_id
-                in_plan = [p for p in placeholders if p["file"] == entry.plan]
-                if in_plan:
-                    row["problem"] = " ".join(describe_placeholders(in_plan))
-                for spec in plan.items:
-                    found = sorted(
-                        f.name for f in exports.glob(spec.source) if f.is_file())
-                    row["items"].append({
-                        "item_id": spec.item_id, "source": spec.source,
-                        "found": found, "required": spec.required,
-                    })
-                missing = [i for i in row["items"] if not i["found"]]
-                if missing:
-                    row["problem"] = "; ".join(filter(None, [
-                        row["problem"],
-                        f"{len(missing)} of {len(row['items'])} item(s) match no "
-                        "file in the export folder"]))
-                row["ready"] = not row["problem"]
-        if not row["ready"]:
-            problems += 1
-        rows.append(row)
+    lines: list[list[ItemOutcome]] = []
+    specs_by_row: list[dict[str, Any]] = []
+    with no_network() as airgap:
+        for entry in config.machines:
+            row, outcomes, specs = _check_machine(entry, config, placeholders)
+            rows.append(row)
+            lines.append(outcomes)
+            specs_by_row.append(specs)
+    problems = sum(1 for row in rows if not row["ready"]) + (0 if airgap.held else 1)
+    run_command = (f"python -m assurance kit run {shlex.quote(str(args.config))} "
+                   f"--out {shlex.quote(str(Path(args.config).parent / 'out'))}")
 
     if args.json:
         print(json.dumps({"kit_id": config.kit_id, "ready": not problems,
                           "machines": rows, "problems": problems,
-                          "placeholders": placeholders}, indent=2))
+                          "placeholders": placeholders, "airgap": airgap.to_dict(),
+                          "run_command": run_command if not problems else ""}, indent=2))
         return 1 if problems else 0
 
     print(f"{config.kit_id} — {config.organisation}"
           + (f" — {config.site}" if config.site else ""))
     print(f"  prepared by {config.prepared_by}")
     print(f"\n  {len(config.machines)} machine(s):")
-    for row in rows:
+    for row, outcomes, specs in zip(rows, lines, specs_by_row, strict=True):
         print(f"  {' ' if row['ready'] else '!'} {row['serial']}"
               + (f"   [{row['plan_id']}]" if row.get("plan_id") else ""))
         print(f"      plan     {row['plan']}")
         print(f"      exports  {row['exports']}")
-        for item in row["items"]:
-            mark = "  " if item["found"] else "->"
-            detail = ", ".join(item["found"]) if item["found"] else "NO MATCH"
-            flag = "" if item["found"] or not item["required"] else "  (required)"
-            print(f"      {mark} {item['item_id']:<12} {item['source']:<24} "
-                  f"{detail}{flag}")
+        for o in outcomes:
+            if o.status == "missing":
+                spec = specs[o.item_id]
+                flag = "  (required)" if spec.required else "  (optional)"
+                print(f"      MISS {o.item_id:<12} NO MATCH for {spec.source!r}{flag}")
+            else:
+                for line in _outcome_lines(o):
+                    print(line)
         if row["problem"]:
             print(f"      ! {row['problem']}")
 
@@ -351,12 +373,23 @@ def _cmd_check(args: argparse.Namespace) -> int:
     print("  socket layer, refuses every outbound connection, and seals the "
           "result into your")
     print("  own ledger, so the claim is checkable rather than promised.")
+    print(f"\n  check read every file above under the same guard and wrote nothing: "
+          f"{airgap.summary()}")
+    for attempt in airgap.attempts:
+        print(f"      ! {attempt.api} -> {attempt.target}  from {attempt.caller}")
     if problems:
-        print(f"\n  {problems} machine(s) are not ready. An item that matches no "
-              "file is left out of")
-        print("  the manifest entirely — fix the `source` entries, or drop the "
-              "missing exports in,")
-        print("  before you run.")
+        print(f"\n  NOT READY: {problems} problem(s), marked FAIL, MISS or ! above. A machine with "
+              "an item that")
+        print("  cannot be read is not sealed by `run` (the attempt is recorded, nothing "
+              "describes the machine).")
+        print("  Fix the export files, the `source` entries and the template values, then "
+              "run check again.")
+    else:
+        warned = sum(1 for outcomes in lines for o in outcomes if o.warnings)
+        print("\n  READY: every item of every machine was found and read."
+              + (f" {warned} item(s) carry warnings above; read them first." if warned else ""))
+        print("  Run it with:")
+        print(f"\n    {run_command}")
     return 1 if problems else 0
 
 

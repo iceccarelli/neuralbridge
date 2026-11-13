@@ -145,3 +145,231 @@ def test_json_mode_carries_the_same_facts(tmp_path, capsys, flag):
         assert machine["missing"] == ["ITM-PLC"] and machine["sealed"] is False
     else:
         assert "ITM-PLC" in text
+
+
+# =====================================================================
+# `kit check` reads exactly what `run` reads, and says what would fail.
+# =====================================================================
+def _tree_state(root: Path) -> dict[str, tuple[int, int]]:
+    return {str(p.relative_to(root)): (p.stat().st_size, p.stat().st_mtime_ns)
+            for p in sorted(root.rglob("*"))}
+
+
+def _zip_bytes(member: str, size: int) -> bytes:
+    import io
+    import zipfile
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr(member, b"\0" * size)
+    return buf.getvalue()
+
+
+def _utf16(path: Path) -> None:
+    path.write_bytes("zone=1\n".encode("utf-16"))
+
+
+def _symlink_out(path: Path) -> None:
+    path.unlink()
+    path.symlink_to("/etc/hostname")
+
+
+#: (id, file, how to ruin it, a phrase the reason must contain)
+BAD_INPUTS = [
+    ("empty text", "scanner-zones.cfg", lambda p: p.write_bytes(b""), "could not be hashed completely"),
+    ("binary under a text rule", "scanner-zones.cfg",
+     lambda p: p.write_bytes(bytes(range(256)) * 4), "cannot read as utf-8"),
+    ("latin-1", "scanner-zones.cfg",
+     lambda p: p.write_bytes("zone=Müller\n".encode("latin-1")), "cannot read as utf-8"),
+    ("utf-16", "scanner-zones.cfg", _utf16, "cannot read as utf-8"),
+    ("invalid json", "robot-params.json", lambda p: p.write_text("{not json"), "ITM-PARAMS"),
+    ("duplicate-key json", "robot-params.json",
+     lambda p: p.write_text('{"a": 1, "a": 2}'), "ITM-PARAMS"),
+    ("not a zip", "plc-project.zip", lambda p: p.write_bytes(b"hello"), "ITM-PLC"),
+    ("truncated zip", "plc-project.zip",
+     lambda p: p.write_bytes(p.read_bytes()[:-30]), "ITM-PLC"),
+    ("2 MB line", "scanner-zones.cfg",
+     lambda p: p.write_text("x" * (2 * 1024**2) + "\n"), "line"),
+    ("symlink out of the folder", "scanner-zones.cfg", _symlink_out, "outside the collection"),
+    ("member missing from the archive", "plc-project.zip",
+     lambda p: p.write_bytes(_zip_bytes("other/x.st", 10)), "ITM-PLC"),
+]
+
+
+@pytest.mark.parametrize("name,fname,ruin,phrase", BAD_INPUTS, ids=[b[0] for b in BAD_INPUTS])
+class TestCheckFindsWhatRunWouldFail:
+    def test_check_fails_and_names_the_item_before_run_does(
+            self, tmp_path, capsys, name, fname, ruin, phrase):
+        kit = make_kit(tmp_path)
+        ruin(tmp_path / "exports" / "AR7-1001" / fname)
+
+        rc = run_cli("check", str(kit))
+        out = capsys.readouterr().out
+
+        assert rc == 1, f"{name}: check said it was fine and run would fail"
+        assert "NOT READY" in out and "\n  READY:" not in out
+        assert phrase in out, out
+        # ... and it was right: run, on the same inputs, does not record the machine.
+        assert run_cli("run", str(kit), "--out", str(tmp_path / "out")) == 2
+
+    def test_check_json_marks_the_item_and_the_machine(
+            self, tmp_path, capsys, name, fname, ruin, phrase):
+        kit = make_kit(tmp_path)
+        ruin(tmp_path / "exports" / "AR7-1001" / fname)
+        rc = run_cli("check", str(kit), "--json")
+        body = json.loads(capsys.readouterr().out)
+        assert rc == 1 and body["ready"] is False and body["run_command"] == ""
+        machine = body["machines"][0]
+        assert machine["ready"] is False
+        assert any(i["status"] != "collected" for i in machine["items"])
+
+
+def test_a_zip_bomb_is_found_by_check(tmp_path, capsys, monkeypatch):
+    """The 512 MiB member cap, lowered so the test does not build a 600 MB archive."""
+    from assurance.collect import normalise
+
+    monkeypatch.setattr(normalise, "MAX_ARCHIVE_MEMBER_BYTES", 1024)
+    kit = make_kit(tmp_path)
+    (tmp_path / "exports" / "AR7-1001" / "plc-project.zip").write_bytes(
+        _zip_bytes("program/main.st", 100_000))
+    assert run_cli("check", str(kit)) == 1
+    assert "ITM-PLC" in capsys.readouterr().out
+
+
+class TestCheckOnAReadyKit:
+    def test_it_says_ready_and_prints_the_exact_run_command(self, tmp_path, capsys):
+        kit = make_kit(tmp_path)
+        assert run_cli("check", str(kit)) == 0
+        out = capsys.readouterr().out
+        assert "READY: every item of every machine was found and read" in out
+        assert f"python -m assurance kit run {kit} --out {tmp_path / 'out'}" in out
+
+    def test_it_shows_each_item_with_digest_version_and_file(self, tmp_path, capsys):
+        kit = make_kit(tmp_path)
+        run_cli("check", str(kit), "--json")
+        body = json.loads(capsys.readouterr().out)
+        items = {i["item_id"]: i for i in body["machines"][0]["items"]}
+        assert items["ITM-PARAMS"]["version"] == "3.8.2"
+        assert items["ITM-ZONES"]["version"] == ""
+        assert len(items["ITM-FW"]["digest"]) == 64
+        assert items["ITM-FW"]["found"] == ["controller-fw.bin"]
+        assert body["run_command"].startswith("python -m assurance kit run ")
+        run_cli("check", str(kit))
+        out = capsys.readouterr().out
+        assert "v3.8.2" in out and "version unknown" in out
+        assert items["ITM-PARAMS"]["digest"][:12] in out
+
+    def test_it_surfaces_an_item_warning_without_failing(self, tmp_path, capsys):
+        kit = make_kit(tmp_path)
+        zones = tmp_path / "exports" / "AR7-1001" / "scanner-zones.cfg"
+        zones.write_text("[zone.1]\nradius_mm=1500\n")        # no header: both patterns idle
+        assert run_cli("check", str(kit)) == 0
+        out = capsys.readouterr().out
+        assert "matched no line" in out
+        assert "carry warnings above" in out
+
+    def test_it_touches_nothing(self, tmp_path, monkeypatch):
+        """Safe to hand to an IT department: no file created, none modified, no ledger opened."""
+        kit = make_kit(tmp_path)
+        before = _tree_state(tmp_path)
+
+        from assurance.evidence import ledger as ledger_module
+
+        def refuse(*_a, **_k):
+            raise AssertionError("check opened an evidence ledger")
+
+        monkeypatch.setattr(ledger_module.EvidenceLedger, "__init__", refuse)
+        assert run_cli("check", str(kit)) == 0
+        assert _tree_state(tmp_path) == before
+        assert not (tmp_path / "out").exists()
+        assert not list(tmp_path.rglob("*.db"))
+
+    def test_it_reads_under_the_same_socket_guard_as_run(self, tmp_path, capsys, monkeypatch):
+        """If reading a file ever tried the network, check must say so and fail."""
+        import socket
+
+        from assurance.kit import enrol
+
+        real = enrol.collect
+
+        def collect_that_phones_home(*a, **k):
+            try:
+                socket.create_connection(("192.0.2.1", 443), timeout=0.1)
+            except Exception:  # noqa: S110 - the guard's refusal is the point
+                pass
+            return real(*a, **k)
+
+        monkeypatch.setattr(enrol, "collect", collect_that_phones_home)
+        kit = make_kit(tmp_path)
+        rc = run_cli("check", str(kit), "--json")
+        body = json.loads(capsys.readouterr().out)
+        assert rc == 1 and body["ready"] is False
+        assert body["airgap"]["held"] is False
+        assert body["airgap"]["attempts"][0]["target"].startswith("192.0.2.1")
+
+
+# =====================================================================
+# Per-item reasons survive into the terminal, run.json and the ledger.
+# =====================================================================
+class TestPerItemReasonsAreNotThrownAway:
+    def _outcomes(self, out: Path) -> dict:
+        machine = json.loads((out / "run.json").read_text())["machines"][0]
+        return {o["item_id"]: o for o in machine["outcomes"]}
+
+    def test_an_unreadable_item_says_why_in_the_terminal_and_the_record(
+            self, tmp_path, capsys):
+        kit = make_kit(tmp_path)
+        (tmp_path / "exports" / "AR7-1001" / "scanner-zones.cfg").write_bytes(
+            "zone=Müller\n".encode("latin-1"))
+        out = tmp_path / "out"
+
+        run_cli("run", str(kit), "--out", str(out))
+        text = capsys.readouterr().out
+
+        assert "ITM-ZONES" in text and "cannot read as utf-8 text" in text
+        zones = self._outcomes(out)["ITM-ZONES"]
+        assert zones["status"] == "unreadable"
+        assert "cannot read as utf-8 text" in zones["detail"]
+        # sealed in the ledger as well, so the reason outlives the terminal
+        sealed = run_record(out)["machines"][0]["outcomes"]
+        assert any("cannot read as utf-8 text" in o["detail"] for o in sealed)
+
+    def test_a_pattern_that_matched_no_line_is_shown_on_a_complete_machine(
+            self, tmp_path, capsys):
+        """A UTF-8 byte-order mark hides the first-line header from `^#` and the export
+        is still COMPLETE; the warning is the only sign the digest is not the one the
+        plan's author intended."""
+        kit = make_kit(tmp_path)
+        zones = tmp_path / "exports" / "AR7-1001" / "scanner-zones.cfg"
+        zones.write_bytes(b"\xef\xbb\xbf" + zones.read_bytes())
+        out = tmp_path / "out"
+
+        assert run_cli("run", str(kit), "--out", str(out)) == 0
+        text = capsys.readouterr().out
+
+        assert "matched no line" in text
+        warnings = self._outcomes(out)["ITM-ZONES"]["warnings"]
+        assert any("matched no line" in w for w in warnings)
+
+    def test_a_version_that_was_not_found_is_shown(self, tmp_path, capsys):
+        kit = make_kit(tmp_path)
+        params = tmp_path / "exports" / "AR7-1001" / "robot-params.json"
+        params.write_text(json.dumps({"export": {"timestamp": "t", "operator": "o"},
+                                      "safety": {"max_tcp_speed_mm_s": 400}}))
+        out = tmp_path / "out"
+
+        assert run_cli("run", str(kit), "--out", str(out)) == 0
+        text = capsys.readouterr().out
+
+        assert "expects a json version and none was found" in text
+        assert self._outcomes(out)["ITM-PARAMS"]["version"] == ""
+
+    def test_every_recorded_item_names_its_file_digest_and_version(self, tmp_path):
+        kit = make_kit(tmp_path)
+        out = tmp_path / "out"
+        assert run_cli("run", str(kit), "--out", str(out)) == 0
+        params = self._outcomes(out)["ITM-PARAMS"]
+        assert params["files"] == ["robot-params.json"]
+        assert len(params["digest"]) == 64 and params["version"] == "3.8.2"
+        html = (out / "report.html").read_text()
+        assert "ITM-PARAMS read from robot-params.json" in html
