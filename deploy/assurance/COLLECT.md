@@ -106,6 +106,13 @@ long line.
 
 ## What collection refuses to do
 
+**An optional item that is not there is complete, with a note.** A plan marks an item
+`"required": false` when its absence is expected. Such a collection is COMPLETE (and
+`collect run` seals it without `--seal-incomplete`), and the manifest notes say `[optional
+item(s) not present: ITM-X]`, so the manifest never silently looks like it holds the whole
+plan. An optional item that exists but cannot be read is still unreadable, and the collection
+INCOMPLETE.
+
 **A required item that is not there is not in the manifest.** It is a loud
 warning and a non-zero exit instead. A manifest listing an item nobody hashed
 would assert the machine has software that was never seen, and every comparison

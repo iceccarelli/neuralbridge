@@ -188,6 +188,12 @@ per item with its files, digest, version and warnings), named in the terminal an
 report. `--seal-incomplete` has exactly the `collect run` meaning: the manifest is sealed with
 its incomplete-collection marker, and the report says so.
 
+An item the plan marks `"required": false` and that is absent does not make a machine
+incomplete: the machine is recorded, `check` marks the item `(optional: not a gap)`, the run
+output and `run.json` (`optional_absent`) list it, and the manifest notes carry `[optional
+item(s) not present: ...]`. A required item that is absent, or any item that exists and
+cannot be read, makes the machine incomplete as above.
+
 ## Closing the loop: the counter-signature
 
 `attestation-request.json` holds exactly three numbers and a note:

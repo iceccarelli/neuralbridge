@@ -330,7 +330,14 @@ class MachineResult:
     @property
     def missing(self) -> tuple[str, ...]:
         """The item ids the plan names that were not collected (missing or unreadable)."""
-        return tuple(o.item_id for o in self.outcomes if not o.ok)
+        return tuple(o.item_id for o in self.outcomes
+                     if not o.ok and (o.required or o.status == "unreadable"))
+
+    @property
+    def optional_absent(self) -> tuple[str, ...]:
+        """Optional items with no file: expected, named in the manifest notes, not a gap."""
+        return tuple(o.item_id for o in self.outcomes
+                     if o.status == "missing" and not o.required)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -338,6 +345,7 @@ class MachineResult:
             "configuration_hash": self.configuration_hash, "plan_id": self.plan_id,
             "warnings": list(self.warnings), "detail": self.detail,
             "sealed": self.sealed, "missing": list(self.missing),
+            "optional_absent": list(self.optional_absent),
             "outcomes": [o.to_dict() for o in self.outcomes],
         }
 
@@ -599,6 +607,10 @@ def _enrol_one(
         f"the supplier of {', '.join(template_suppliers)} is still a template value in "
         f"{plan_path.name}; an advisory matches on the supplier, so it will not match "
         "these items until it is filled in.",) if template_suppliers else ())
+    if result.optional_absent:
+        warnings += (
+            f"optional item(s) not present: {', '.join(o.item_id for o in result.optional_absent)}"
+            f" (the plan marks them optional; the manifest notes list them).",)
     common: dict[str, Any] = {
         "serial": entry.serial, "items": len(result.manifest.items),
         "plan_id": plan.plan_id, "warnings": warnings, "outcomes": result.outcomes,
@@ -619,7 +631,8 @@ def _enrol_one(
     # operator asked for exactly that; otherwise the attempt is recorded in the run record
     # (with the missing item ids and why) and nothing describes this machine in the ledger.
     missing = ", ".join(
-        f"{o.item_id} ({o.status})" for o in result.outcomes if not o.ok)
+        f"{o.item_id} ({o.status})" for o in result.outcomes
+        if not o.ok and (o.required or o.status == "unreadable"))
     if seal_incomplete:
         record_manifest(ledger, result.manifest, actor=config.actor)
         return MachineResult(
@@ -638,6 +651,8 @@ def _outcome_phrase(o: ItemOutcome) -> str:
         files = ", ".join(o.files) if o.files else "no file"
         return (f"{o.item_id} read from {files} (digest {o.digest[:12]}, "
                 + (f"version {o.version}" if o.version else "version unknown") + ")")
+    if o.status == "missing" and not o.required:
+        return f"{o.item_id} not present (optional)"
     return f"{o.item_id} {o.status.upper()}: {o.detail}"
 
 

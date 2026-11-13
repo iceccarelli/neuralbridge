@@ -102,6 +102,8 @@ class ItemOutcome:
     applied: dict[str, int] = field(default_factory=dict)
     warnings: tuple[str, ...] = ()
     detail: str = ""
+    #: Whether the plan requires this item. An absent optional item is expected.
+    required: bool = True
 
     @property
     def ok(self) -> bool:
@@ -115,6 +117,7 @@ class ItemOutcome:
             "version_from": self.version_from, "bytes_in": self.bytes_in, "bytes_hashed": self.bytes_hashed,
             "applied": dict(sorted(self.applied.items())),
             "warnings": list(self.warnings), "detail": self.detail,
+            "required": self.required,
         }
 
 
@@ -131,7 +134,13 @@ class CollectionResult:
 
     @property
     def missing(self) -> tuple[ItemOutcome, ...]:
-        return tuple(o for o in self.outcomes if o.status == "missing")
+        """Required items with no file. An absent optional item is :attr:`optional_absent`."""
+        return tuple(o for o in self.outcomes if o.status == "missing" and o.required)
+
+    @property
+    def optional_absent(self) -> tuple[ItemOutcome, ...]:
+        """Optional items with no file: expected, listed in the manifest notes, not a gap."""
+        return tuple(o for o in self.outcomes if o.status == "missing" and not o.required)
 
     @property
     def unreadable(self) -> tuple[ItemOutcome, ...]:
@@ -139,7 +148,11 @@ class CollectionResult:
 
     @property
     def complete(self) -> bool:
-        """Whether every required item in the plan was actually hashed."""
+        """Whether every required item was hashed and nothing that exists was unreadable.
+
+        An optional item with no file does not make a collection incomplete (it is named in
+        the manifest notes); an optional item that exists and cannot be read does.
+        """
         return not self.missing and not self.unreadable
 
     def to_dict(self) -> dict[str, Any]:
@@ -222,7 +235,7 @@ def _read_version(path: Path, spec: ItemSpec, warnings: list[str]) -> str:
 
 def _unreadable(spec: ItemSpec, rel: tuple[str, ...], detail: str) -> ItemOutcome:
     return ItemOutcome(item_id=spec.item_id, status="unreadable", files=rel,
-                       detail=detail)
+                       detail=detail, required=spec.required)
 
 
 def _collect_item(root: Path, spec: ItemSpec, deadline: float) -> ItemOutcome:
@@ -239,7 +252,7 @@ def _collect_item(root: Path, spec: ItemSpec, deadline: float) -> ItemOutcome:
 
     if not files:
         return ItemOutcome(
-            item_id=spec.item_id, status="missing",
+            item_id=spec.item_id, status="missing", required=spec.required,
             detail=(
                 f"nothing matched {spec.source!r} under the collection root. "
                 + ("This item is required by the plan and has been LEFT OUT of the "
@@ -314,6 +327,7 @@ def _collect_item(root: Path, spec: ItemSpec, deadline: float) -> ItemOutcome:
         bytes_in=bytes_in,
         bytes_hashed=bytes_hashed, applied=applied, warnings=tuple(warnings),
         detail=(f"{len(files)} files, hashed as a set" if len(files) > 1 else ""),
+        required=spec.required,
     )
 
 
@@ -381,7 +395,7 @@ def collect(
 
     for spec, outcome in zip(plan.items, outcomes, strict=True):
         if not outcome.ok:
-            if spec.required:
+            if spec.required or outcome.status == "unreadable":
                 warnings.append(
                     f"{spec.item_id} is required by plan {plan.plan_id} and was "
                     f"{outcome.status}. It is absent from this manifest, so no "
@@ -429,10 +443,18 @@ def collect(
     # A partial collection says so on the manifest itself, wherever it is written (a file,
     # the ledger, the kit, the watch): the marker is what every later reader uses to tell a
     # partial look from a configuration the machine was in. Not added twice.
-    missing_ids = tuple(o.item_id for o in (*(o for o in outcomes if o.status == "missing"),
-                                            *(o for o in outcomes if o.status == "unreadable")))
+    missing_ids = tuple(o.item_id for o in (
+        *(o for o in outcomes if o.status == "missing" and o.required),
+        *(o for o in outcomes if o.status == "unreadable")))
     if missing_ids and INCOMPLETE_COLLECTION_MARK not in notes:
         notes = (notes + " " if notes else "") + incomplete_collection_note(missing_ids)
+    absent_optional = tuple(o.item_id for o in outcomes
+                            if o.status == "missing" and not o.required)
+    if absent_optional:
+        # Never silent: the plan marks these optional, so the collection is complete, and the
+        # manifest still says which of the plan's items it does not contain.
+        notes = (notes + " " if notes else "") + (
+            f"[optional item(s) not present: {', '.join(absent_optional)}]")
 
     try:
         identity = MachineIdentity(

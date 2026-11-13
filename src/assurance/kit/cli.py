@@ -285,7 +285,7 @@ def _check_machine(entry: Any, config: KitConfig, placeholders: list[dict[str, s
                 "required": spec.required, "status": o.status, "digest": o.digest,
                 "version": o.version, "warnings": list(o.warnings), "detail": o.detail,
             })
-        missing = [o for o in outcomes if o.status == "missing"]
+        missing = [o for o in outcomes if o.status == "missing" and o.required]
         unreadable = [o for o in outcomes if o.status == "unreadable"]
         if missing:
             problems.append(f"{len(missing)} of {len(outcomes)} item(s) match no file in the "
@@ -361,7 +361,7 @@ def _cmd_check(args: argparse.Namespace) -> int:
         for o in outcomes:
             if o.status == "missing":
                 spec = specs[o.item_id]
-                flag = "  (required)" if spec.required else "  (optional)"
+                flag = "  (required)" if spec.required else "  (optional: not a gap)"
                 print(f"      MISS {o.item_id:<12} NO MATCH for {spec.source!r}{flag}")
             else:
                 for line in _outcome_lines(o):
