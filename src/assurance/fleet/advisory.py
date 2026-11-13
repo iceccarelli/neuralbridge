@@ -15,7 +15,13 @@ flattened:
 
 ``hash``
     The artefact on the machine is byte-identical to one the supplier named.
-    There is nothing to argue about.
+    There is nothing to argue about. This is decided *before* the supplier and
+    component names are compared: identical bytes are the same artefact whatever
+    string a person typed into the manifest, so a re-badged copy of affected
+    firmware under another supplier's spelling is still affected. The detail then
+    names both spellings. A hash that was not read from the machine (typed in, or
+    computed from a vendor file) never confirms anything; where it coincides with an
+    affected hash it is at least ``name_only`` and a person looks.
 
 ``hash_mismatch``
     The machine reports a version the advisory names, and the artefact does
@@ -49,7 +55,7 @@ from typing import Any
 
 from assurance.core.errors import AssuranceError
 from assurance.core.identity import content_hash_of, format_utc, parse_utc
-from assurance.machinery.manifest import SafetyItem
+from assurance.machinery.manifest import SafetyItem, normalised_digest
 
 __all__ = [
     "IMPORT_ORIGINS",
@@ -596,6 +602,85 @@ def _entries_named(advisory: ComponentAdvisory, name: str) -> tuple[AffectedArte
     return tuple(index.get(fold_text(name), ()))
 
 
+def _digest(text: str) -> str:
+    """``text`` as a comparable SHA-256 digest, or ``""`` if it is not one.
+
+    The hash-first pass compares across component names, so a placeholder (``n/a``, ``0``)
+    must never meet another placeholder: only a real digest takes part.
+    """
+    return normalised_digest(fold_hash(text))
+
+
+def _entries_with_hash(advisory: ComponentAdvisory, digest: str) -> tuple[AffectedArtefact, ...]:
+    """The affected entries that list this digest, whatever component they name."""
+    index = advisory.__dict__.get("_hash_index")
+    if index is None:
+        index = {}
+        for artefact in advisory.affected:
+            for h in artefact.content_hashes:
+                d = _digest(h)
+                if d:
+                    index.setdefault(d, []).append(artefact)
+        object.__setattr__(advisory, "_hash_index", index)
+    return tuple(index.get(digest, ()))
+
+
+def _spelling(artefact: AffectedArtefact, item: SafetyItem) -> str:
+    """How the machine's supplier / component spelling differs from the advisory's, or ``""``."""
+    same_supplier = fold_text(artefact.supplier) == fold_text(item.supplier)
+    same_name = fold_text(artefact.name) == fold_text(item.name)
+    if same_supplier and same_name:
+        return ""
+    parts = [part for part, same in (("supplier", same_supplier),
+                                     ("component name", same_name)) if not same]
+    return (
+        f" The {' and '.join(parts)} {'differ' if len(parts) > 1 else 'differs'}: the advisory says {artefact.supplier!r} / {artefact.name!r}, "
+        f"this machine says {item.supplier or '(no supplier recorded)'!r} / {item.name!r}. "
+        "Identical bytes are the same artefact whatever a person typed (a re-badged or "
+        "white-labelled copy of affected firmware is affected), so the match does not wait "
+        "on the spelling; somebody should still reconcile it with the supplier."
+    )
+
+
+def _hash_first(
+    advisory: ComponentAdvisory, item: SafetyItem,
+    best: tuple[MatchBasis, str] | None,
+) -> tuple[MatchBasis, str] | None:
+    """Raise ``best`` to what the artefact's own bytes say, ahead of any name comparison.
+
+    The component-name pass cannot see an item whose supplier or name is spelled
+    differently from the advisory's, and the rule behind it (a different supplier is a
+    different product) is sound for a label but wrong for a hash: byte-identical is the same
+    artefact. So an item whose recorded hash is one the advisory lists as affected is never
+    left clear:
+
+    * read from this machine: ``hash`` (confirmed), exactly as for a matching supplier, with
+      the two spellings named in the detail;
+    * not read from this machine (typed in, or from a vendor file): says what should be
+      there, not what is, so it cannot confirm. If nothing else matched it is ``name_only``
+      and a person looks; a stronger label match is left as it was.
+    """
+    digest = _digest(item.content_hash)
+    hits = _entries_with_hash(advisory, digest) if digest else ()
+    if not hits:
+        return best
+    entry = next((a for a in hits if _same_component(a, item)), hits[0])
+    if item.hash_source.describes_this_unit:
+        if best is not None and best[0] is MatchBasis.HASH:
+            return best
+        return MatchBasis.HASH, (
+            f"the artefact on this machine is byte-identical to one "
+            f"{advisory.issued_by} named as affected ({digest[:12]})." + _spelling(entry, item))
+    if best is not None:
+        return best
+    return MatchBasis.NAME_ONLY, (
+        f"the hash recorded for this item ({digest[:12]}, {item.hash_source.value}) is one "
+        f"{advisory.issued_by} named as affected for {entry.supplier} {entry.name}, but it "
+        "was not read from this machine, so it says what should be here and not what is, and "
+        "it cannot confirm anything." + _spelling(entry, item) + " Somebody has to look."
+    )
+
+
 def match_item(
     advisory: ComponentAdvisory, item: SafetyItem,
 ) -> tuple[MatchBasis, str] | None:
@@ -607,9 +692,11 @@ def match_item(
     entries the strongest basis wins, in that order, so the answer does not
     depend on which entry the supplier listed first.
 
-    Only a hash read from the machine counts as a hash. Names and version labels
-    are compared as :func:`fold_text` folds them; hashes as :func:`fold_hash`
-    folds them, and never by prefix.
+    The hash is compared before the names are: an item whose artefact is one the
+    advisory lists as affected is never ``None`` because its supplier or component name is
+    spelled differently (:func:`_hash_first`). Only a hash read from the machine counts as
+    a confirming hash. Names and version labels are compared as :func:`fold_text` folds
+    them; hashes as :func:`fold_hash` folds them, and never by prefix.
     """
     best: tuple[MatchBasis, str] | None = None
     # Every branch of _match_artefact that can answer needs the component NAMES to be equal,
@@ -620,4 +707,4 @@ def match_item(
             continue
         if best is None or _PRIORITY[found[0]] < _PRIORITY[best[0]]:
             best = found
-    return best
+    return _hash_first(advisory, item, best)

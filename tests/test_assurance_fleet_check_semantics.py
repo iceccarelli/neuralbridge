@@ -208,7 +208,9 @@ class TestCustomerVerdictsAreNotFlattering:
                              AssuranceVerdict.POTENTIALLY_AFFECTED)
 
     def test_an_item_with_no_supplier_that_shares_the_name_needs_a_human(self):
-        it = item(supplier="")
+        # A hash that is not the advisory's (byte-identical firmware needs no supplier to be
+        # recognised: tests/test_fleet_hash_precedence.py), so only the name is shared.
+        it = item(supplier="", h="7" * 64)
         m = manifest(items=(it,))
         c = run_ad_hoc_check(m, advisory())
         assert c.verdict is AssuranceVerdict.REQUIRES_HUMAN_REVIEW

@@ -159,12 +159,16 @@ class TestMatching:
         assert basis is MatchBasis.NAME_ONLY
         assert "Somebody has to look" in detail
 
-    def test_a_different_supplier_does_not_match(self):
-        assert match_item(advisory(), fw(supplier="OtherCo")) is None
+    def test_a_different_supplier_with_a_different_artefact_does_not_match(self):
+        # Only where the bytes also differ. A different supplier whose firmware is
+        # byte-identical to an affected hash is the same artefact:
+        # tests/test_fleet_hash_precedence.py.
+        assert match_item(advisory(), fw(content_hash=OTHER_FW, supplier="OtherCo")) is None
 
     def test_supplier_matching_is_case_and_space_insensitive_but_not_fuzzy(self):
         assert match_item(advisory(), fw(supplier=" controlco ")) is not None
-        assert match_item(advisory(), fw(supplier="Control Co GmbH")) is None
+        assert match_item(advisory(), fw(content_hash=OTHER_FW,
+                                         supplier="Control Co GmbH")) is None
 
     def test_an_advisory_naming_neither_version_nor_hash_is_refused(self):
         with pytest.raises(AdvisoryError, match="every version"):

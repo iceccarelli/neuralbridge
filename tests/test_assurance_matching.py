@@ -121,13 +121,16 @@ class TestIdentityOfNames:
         assert basis(adv, item()) is MatchBasis.HASH
 
     def test_it_is_still_not_fuzzy(self):
-        assert match_item(advisory(), item(supplier="Control Co GmbH")) is None
-        assert match_item(advisory(), item(supplier="ControlCo2")) is None
-        assert match_item(advisory(), item(name="Safety controller firmware v2")) is None
+        # A different artefact: the names alone never match. (Byte-identical firmware under
+        # another spelling is the same artefact: tests/test_fleet_hash_precedence.py.)
+        assert match_item(advisory(), item(supplier="Control Co GmbH", content_hash=OTHER)) is None
+        assert match_item(advisory(), item(supplier="ControlCo2", content_hash=OTHER)) is None
+        assert match_item(advisory(), item(name="Safety controller firmware v2",
+                                           content_hash=OTHER)) is None
 
     def test_a_name_that_differs_only_by_an_invisible_character_is_not_called_equal(self):
         """Zero-width characters are not whitespace; they are a different string."""
-        assert match_item(advisory(), item(supplier="Control​Co")) is None
+        assert match_item(advisory(), item(supplier="Control​Co", content_hash=OTHER)) is None
 
 
 class TestIdentityOfHashes:
