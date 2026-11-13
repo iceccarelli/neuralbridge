@@ -297,6 +297,9 @@ def _crypto():
 def load_public_key(pem: bytes):
     """``(public key object, fingerprint)`` for an Ed25519 PEM public key, else ValueError."""
     _, serialization, ed25519 = _crypto()
+    if pem.count(b"-----BEGIN ") != 1 or pem.count(b"-----END ") != 1 or not re.fullmatch(
+            rb"\s*-----BEGIN [A-Z0-9 ]+-----.*?-----END [A-Z0-9 ]+-----\s*", pem, re.DOTALL):
+        raise ValueError("a public key must be exactly one PEM block with nothing before or after it")
     public = serialization.load_pem_public_key(pem)
     if not isinstance(public, ed25519.Ed25519PublicKey):
         raise ValueError("not an Ed25519 key")
