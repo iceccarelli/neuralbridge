@@ -220,6 +220,10 @@ CAPABILITIES: tuple[Capability, ...] = (
        "attest trust-list list", gaps={"api": _d(_TRUST), "mcp": _d(_TRUST)}),
     _c("attest.trust_list_verify", "Check the trust file loads as the service loads it",
        "attest trust-list verify-file", gaps={"api": _d(_TRUST), "mcp": _d(_TRUST)}),
+    _c("attest.keyset_add", "Add a PUBLIC key to a verifier's keyset, pinned to a fingerprint",
+       "attest keyset add", gaps={"api": _d(_TRUST), "mcp": _d(_TRUST)}),
+    _c("attest.keyset_check", "Check a keyset file loads as the verifier loads it",
+       "attest keyset check", gaps={"api": _d(_TRUST), "mcp": _d(_TRUST)}),
 
     # --- machine: verifying a recorded run against a declared envelope ----------------------
     _c("machine.separation", "The protective separation distance, term by term",

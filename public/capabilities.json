@@ -728,6 +728,56 @@
     },
     {
       "hosting": {
+        "mode": "operator_machine_only",
+        "statement": "Key custody or trust configuration performed on the operator's or verifier's own machine. A request or a tool cannot supply or change it."
+      },
+      "id": "attest.keyset_add",
+      "service": "attest",
+      "surfaces": {
+        "api": {
+          "reason": "trust is the verifier's own configuration, edited on the operator's machine; a request or a tool cannot supply or change it",
+          "status": "by_design"
+        },
+        "cli": {
+          "names": [
+            "attest keyset add"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "reason": "trust is the verifier's own configuration, edited on the operator's machine; a request or a tool cannot supply or change it",
+          "status": "by_design"
+        }
+      },
+      "title": "Add a PUBLIC key to a verifier's keyset, pinned to a fingerprint"
+    },
+    {
+      "hosting": {
+        "mode": "operator_machine_only",
+        "statement": "Key custody or trust configuration performed on the operator's or verifier's own machine. A request or a tool cannot supply or change it."
+      },
+      "id": "attest.keyset_check",
+      "service": "attest",
+      "surfaces": {
+        "api": {
+          "reason": "trust is the verifier's own configuration, edited on the operator's machine; a request or a tool cannot supply or change it",
+          "status": "by_design"
+        },
+        "cli": {
+          "names": [
+            "attest keyset check"
+          ],
+          "status": "available"
+        },
+        "mcp": {
+          "reason": "trust is the verifier's own configuration, edited on the operator's machine; a request or a tool cannot supply or change it",
+          "status": "by_design"
+        }
+      },
+      "title": "Check a keyset file loads as the verifier loads it"
+    },
+    {
+      "hosting": {
         "mode": "hosted_and_offline",
         "statement": "Served by the HTTP API on the calling account's own hosted ledger, and also runnable offline from the command line on local files (the CLI opens no socket for it)."
       },
@@ -3646,6 +3696,7 @@
     "attest": [
       "anchor-all",
       "keygen",
+      "keyset",
       "log",
       "preflight",
       "sign",
@@ -3777,24 +3828,24 @@
   },
   "counts": {
     "api_routes": 103,
-    "capabilities": 134,
-    "cli_commands": 117,
+    "capabilities": 136,
+    "cli_commands": 119,
     "cli_domains": 21,
     "mcp_tools": 53,
     "surfaces": {
       "api": {
         "available": 95,
-        "by_design": 39,
+        "by_design": 41,
         "planned": 0
       },
       "cli": {
-        "available": 120,
+        "available": 122,
         "by_design": 13,
         "planned": 1
       },
       "mcp": {
         "available": 50,
-        "by_design": 84,
+        "by_design": 86,
         "planned": 0
       }
     }
