@@ -147,6 +147,12 @@ class ChangeAssuranceCase:
     #: this case can reach ``READY_TO_CLOSE``.
     required_reverifications: tuple[str, ...] = ()
     human_decisions_required: tuple[str, ...] = ()
+    #: Advisory cases only: machines the assessment could neither include nor exclude
+    #: (``{machine, site, reasons}``), so they are named on the case and not left to the
+    #: generic "not established" text. Each also has a question in
+    #: ``human_decisions_required``. Absent from :meth:`to_dict` while empty, so a case
+    #: sealed before this field existed loads, replays and exports exactly as it did.
+    unknown_machines: tuple[dict[str, Any], ...] = ()
     #: Decisions a named person has answered, ``{decision, resolution, by, at}``.
     #: Kept so a re-observation never re-asks a question already answered.
     resolved_decisions: tuple[dict[str, str], ...] = ()
@@ -304,6 +310,11 @@ class ChangeAssuranceCase:
             lines.append(f"    [ ] {a}")
         if not self.required_actions:
             lines.append("    (none outstanding)")
+        if self.unknown_machines:
+            lines.append("  UNKNOWN machines (neither affected nor cleared):")
+            for u in self.unknown_machines:
+                lines.append(f"    ? {u.get('machine', '?')}: "
+                             f"{'; '.join(u.get('reasons') or ()) or 'no reason recorded'}")
         if self.human_decisions_required:
             lines.append("  human decisions required:")
             for d in self.human_decisions_required:
@@ -345,6 +356,8 @@ class ChangeAssuranceCase:
         for name in ("reviewer", "last_valid_verification"):
             if not out[name]:
                 del out[name]
+        if self.unknown_machines:
+            out["unknown_machines"] = [dict(u) for u in self.unknown_machines]
         return out
 
     def _to_dict(self) -> dict[str, Any]:
@@ -410,6 +423,7 @@ class ChangeAssuranceCase:
             required_actions=tuple(d.get("required_actions", ())),
             required_reverifications=tuple(d.get("required_reverifications", ())),
             human_decisions_required=tuple(d.get("human_decisions_required", ())),
+            unknown_machines=tuple(dict(u) for u in d.get("unknown_machines", ())),
             resolved_decisions=tuple(dict(r) for r in d.get("resolved_decisions", ())),
             owner=str(d.get("owner", "")),
             reviewer=str(d.get("reviewer", "")),

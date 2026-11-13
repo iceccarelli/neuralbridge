@@ -231,6 +231,16 @@ def _union(a: Sequence[str], b: Sequence[str]) -> tuple[str, ...]:
     return tuple(dict.fromkeys([*a, *b]))
 
 
+def _union_unknown(
+    a: Sequence[dict[str, object]], b: Sequence[dict[str, object]],
+) -> tuple[dict[str, object], ...]:
+    """Unknown machines by machine key; a row already on the case is kept as it is."""
+    out = list(a)
+    seen = {u.get("machine") for u in out}
+    out.extend(u for u in b if u.get("machine") not in seen)
+    return tuple(out)
+
+
 def _links_union(
     existing: Sequence[dict[str, str]], new: Sequence[dict[str, str]],
 ) -> tuple[dict[str, str], ...]:
@@ -342,6 +352,7 @@ def _merge(
             required_actions=_union(existing.required_actions, new.required_actions),
             human_decisions_required=_union(existing.human_decisions_required,
                                             fresh_decisions),
+            unknown_machines=_union_unknown(existing.unknown_machines, new.unknown_machines),
             linked_evidence=_append_links(existing.linked_evidence, new.linked_evidence),
             checks_skipped=_union(existing.checks_skipped, new.checks_skipped),
             provenance={**new.provenance, **existing.provenance})
@@ -383,6 +394,7 @@ def _merge(
         required_actions=_union(existing.required_actions, added_actions),
         required_reverifications=reverifs,
         human_decisions_required=decisions,
+        unknown_machines=_union_unknown(existing.unknown_machines, new.unknown_machines),
         linked_evidence=(
             _append_links(existing.linked_evidence, new.linked_evidence)
             if existing.trigger_type is TriggerType.SUPPLIER_ADVISORY
@@ -863,6 +875,23 @@ def assess_advisory(
             human_decisions.append(
                 f"{exposure.machine_key}/{exposure.item_id}: matched by "
                 f"{exposure.confidence} confidence only ({exposure.basis.value}).")
+    # A machine the assessment could neither include nor exclude is not a machine with no
+    # work: it is a machine nobody has answered for. It is named on the case with a question
+    # only a person can resolve, so a report whose only finding is "unknown" cannot reach
+    # ready_to_close (or be closed) without that answer on the record.
+    unknown_rows: list[dict[str, object]] = []
+    for c in impact.classifications:
+        if c.classification != "unknown" and not c.look_problems:
+            continue
+        reasons = tuple(dict.fromkeys(
+            neutralise(r) for r in (*c.unknown_reasons, *c.look_problems)))
+        unknown_rows.append({"machine": c.machine_key, "site": c.site,
+                             "reasons": list(reasons)})
+        human_decisions.append(
+            f"{c.machine_key}: this advisory could NOT be matched to or excluded from this "
+            f"machine ({'; '.join(reasons) or 'no reason recorded'}). Establish what it runs "
+            "(read the artefact hash from the machine and re-assess), or record why the "
+            "advisory does not apply to it. Until then it is neither affected nor clear.")
     for exposure in impact.exposures:
         for f in exposure.functions:
             key = f"{exposure.machine_key}/{f.function_id}"
@@ -895,6 +924,7 @@ def assess_advisory(
         required_actions=tuple(dict.fromkeys(required_actions)),
         required_reverifications=tuple(dict.fromkeys(required_reverifications)),
         human_decisions_required=tuple(dict.fromkeys(human_decisions)),
+        unknown_machines=tuple(unknown_rows),
         linked_evidence=({"relation": "concerns", "content_hash": impact.advisory_hash,
                           "note": f"advisory {neutralise(impact.advisory_id)} from "
                                   f"{neutralise(impact.issued_by)}"
