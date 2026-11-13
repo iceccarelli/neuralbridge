@@ -565,3 +565,23 @@ class TestTheOtherCaseIdUsersAreIssuerAware:
             change_case_id=advisory_case_id_in(store, impact_of(ledger, sc)))
         assert d1.case_id == "CASE-SA-1"                  # the id it always had
         assert d2.case_id.startswith("CASE-SA-1-") and d2.case_id != d1.case_id
+
+
+class TestBridgeArt14CliTakesTheIssuerAwareIntakeId:
+    def test_a_second_suppliers_reused_id_gets_its_own_intake_through_the_cli(
+            self, ledger, store, tmp_path, capsys):
+        import json
+
+        from assurance.bridge.cli import main
+        cc, sc = two_suppliers_one_id(ledger)
+        first = assess_advisory(store, impact_of(ledger, cc), actor=PERSON)
+        close_it(store, first.case_id)
+        ids = {}
+        for name, adv in (("cc", cc), ("sc", sc)):
+            path = tmp_path / f"{name}.json"
+            path.write_text(json.dumps(adv.to_dict()), encoding="utf-8")
+            main(["art14", str(path), "--ledger", str(ledger.path), "--received-by",
+                  "a.integrator", "--json"])
+            ids[name] = json.loads(capsys.readouterr().out)["case_id"]
+        assert ids["cc"] == "CASE-SA-1"                     # the id it always had
+        assert ids["sc"].startswith("CASE-SA-1-") and ids["sc"] != ids["cc"]

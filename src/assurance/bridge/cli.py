@@ -21,7 +21,8 @@ import sys
 from pathlib import Path
 
 from assurance.bridge.art14 import BridgeError, draft_from_advisory, open_case
-from assurance.change.service import named_person_problem
+from assurance.change.service import advisory_case_id_in, named_person_problem
+from assurance.change.store import CaseStore
 from assurance.core.actor_names import actor_name_problem
 from assurance.core.errors import AssuranceError
 from assurance.core.evidence import Actor
@@ -90,11 +91,14 @@ def _cmd_art14(args: argparse.Namespace) -> int:
             raise BridgeError(
                 "opening an unsigned import in the Article 14 register needs "
                 + ", ".join(missing) + ". Nothing was recorded.")
-    fleet = Fleet.from_ledger(EvidenceLedger.open_existing(args.ledger))
+    fleet_ledger = EvidenceLedger.open_existing(args.ledger)
+    fleet = Fleet.from_ledger(fleet_ledger)
     impact = assess_impact(advisory, fleet)
     draft = draft_from_advisory(
         advisory, impact, fleet, case_id=args.case_id,
         received_by=args.received_by, product_name=args.product_name,
+        # read-only: a second supplier that reuses an advisory id takes its own intake id
+        change_case_id=advisory_case_id_in(CaseStore(fleet_ledger), impact),
     )
 
     opened = ""
