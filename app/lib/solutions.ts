@@ -107,7 +107,7 @@ export const SOLUTIONS: SolutionPage[] = [
     lead:
       'CRA Article 14 gives you 24 hours from awareness of an actively exploited vulnerability to file an early warning that indicates, where applicable, the Member States where you know the product has been made available (Art. 14(2)(a)). Getting the clock right, the reasoning right, and the field-5 territory list right, under that pressure, is not a spreadsheet problem.',
     clockAngle:
-      'Two clocks, both load-bearing: the 24-hour early warning under Art. 14, and the final-report clock — 14 days from a corrective or mitigating measure for a vulnerability, one calendar month from submission of the 72-hour notification for an incident. Getting either wrong is not a rounding error.',
+      'Two clocks, both load-bearing: the 24-hour early warning under Art. 14, and the final-report clock — 14 days from a corrective or mitigating measure for a vulnerability, one month from submission of the 72-hour notification for an incident (shown as the earliest end of that month in any fixed-offset calendar). Getting either wrong is not a rounding error.',
     painPoints: [
       { title: 'Awareness is a fact, not a feeling', body: 'The reporting platform does not independently capture the awareness timestamp for vulnerabilities — everything downstream runs from a date only you can defend.' },
       { title: 'The 39-field spec has traps', body: 'A listed territory that is not an EU Member State, a field that exceeds a character limit, a required field silently absent at your stage — the free Validator flags these before you open the platform.' },

@@ -553,7 +553,7 @@ export const PRODUCT_PAGES: ProductPage[] = [
       'Article 14 of the Cyber Resilience Act obliges a manufacturer to report actively exploited vulnerabilities and severe incidents through the ENISA single reporting platform to the CSIRT designated as coordinator and to ENISA, on fixed deadlines, and a register is the record that shows when each clock started and why.',
     problem: [
       'Article 14 has applied since 11 September 2026, and Article 69(3) extends the duty to products placed on the market before 11 December 2027. For an actively exploited vulnerability the first deadline is 24 hours from awareness, and the early warning must indicate, where applicable, the Member States where the manufacturer knows the product has been made available (Art. 14(2)(a)).',
-      'The clocks are easy to get wrong. The code documents six deadlines across two tracks, started by three different facts. The vulnerability final report runs 14 days from the date a corrective or mitigating measure became available, so a documented workaround starts it. The incident final report runs one calendar month from submission of the 72-hour notification. The code also records that the reporting platform currently displays the 72-hour counter as 48 hours after the early warning.',
+      'The clocks are easy to get wrong. The code documents six deadlines across two tracks, started by three different facts. The vulnerability final report runs 14 days from the date a corrective or mitigating measure became available, so a documented workaround starts it. The incident final report runs one month from submission of the 72-hour notification, shown as the earliest end of that month in any fixed-offset calendar. The code also records that the reporting platform currently displays the 72-hour counter as 48 hours after the early warning.',
     ],
     workflow: [
       {
@@ -633,7 +633,7 @@ export const PRODUCT_PAGES: ProductPage[] = [
       },
       {
         q: 'What starts the final-report clock?',
-        a: 'For a vulnerability, a corrective or mitigating measure becoming available, within 14 days. For an incident, submission of the 72-hour notification, with one calendar month to follow.',
+        a: 'For a vulnerability, a corrective or mitigating measure becoming available, within 14 days. For an incident, submission of the 72-hour notification, with one month to follow, shown as the earliest end of that month.',
       },
       {
         q: 'Can triage conclude that something is not reportable?',
