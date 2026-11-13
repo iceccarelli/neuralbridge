@@ -77,7 +77,16 @@ CTRL-2026-11 (ControlCo, safety_relevant) — NEEDS REVIEW — matches found, no
   The trace's provenance ('field') is the filer's own declaration; no recorder attestation was accepted under a trust list this verifier holds, so the trace itself cannot lift this result above community.
   not checked:
     - 130 samples ran at a speed above the one the stopping distance was measured at (500 mm/s). Ss for those samples is a constant-deceleration model, not a measurement.
-  … 6 more not shown`,
+  … 7 more not shown
+…
+  not tested:
+    - Whether the trace came from the machine it names, beyond what its
+      provenance basis says.
+…
+  qualified human review required:
+    - Software drafts this result; a qualified person decides whether it
+      supports a safety claim for this machine. Nothing here is a conformity
+      statement.`,
   },
   {
     key: 'compliance',
