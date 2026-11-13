@@ -105,6 +105,20 @@ run the watch.
 - A pre-work re-look at an *advisory* case (open, or in review with nothing re-verified) is now
   additive for every advisory: it never drops a machine or a link to the advisory it was
   opened on. Drift and intervention cases are unchanged.
+- A machine an advisory report calls **unknown** (or whose latest look was incomplete) is
+  now named on the case (`unknown_machines`, shown by `show` and in the export) and put as a
+  human decision, so a report whose only finding is "unknown" no longer opens a case with
+  "0 machine(s) affected" that can be advanced and closed: it stays in `awaiting_action`
+  until a named person answers with `resolve-decision` (or rejects / defers it).
+- An advisory id does not name a supplier. The case that holds a plain advisory id is the one
+  about its issuer; another supplier's advisory that reuses the id gets its own case (id
+  derived from the id and that issuer), assessed to the same case every time. The same issuer
+  re-issuing an id with different content reopens a settled case; the same document assessed
+  again does not.
+- New optional case fields, absent while empty so older cases and exports are unchanged:
+  `advisory` (id, issuer, title, severity, reference, content hash), `previous_verifications`
+  (the last verification of each exposed machine/function before the advisory) and
+  `unknown_machines`. The advisory's remedy is not yet sealed on the case.
 - Cases already in a ledger keep their ids and carry no marker. A bare file whose advisory id
   matches such a case does not update it (it says so and exits non-zero).
 - `POST /v1/fleet/advisory/signed` rows for an unsigned import are inspect-only

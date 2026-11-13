@@ -154,6 +154,53 @@ def advisory_case_id(impact: ImpactReport) -> str:
     return _case_id(TriggerType.SUPPLIER_ADVISORY, _advisory_trigger(impact))
 
 
+def _advisory_link_note(impact: ImpactReport) -> str:
+    """The note the case's ``concerns`` link to this advisory carries (see :func:`assess_advisory`)."""
+    return f"advisory {neutralise(impact.advisory_id)} from {neutralise(impact.issued_by)}"
+
+
+def _advisory_links(case: ChangeAssuranceCase) -> list[dict[str, str]]:
+    return [r for r in case.linked_evidence
+            if r.get("relation") == "concerns" and r.get("note", "").startswith("advisory ")]
+
+
+def _concerns_issuer(case: ChangeAssuranceCase, impact: ImpactReport) -> bool:
+    """Is ``case`` about this advisory's issuer (or this very document)?
+
+    A case that records no advisory link at all (it should not exist) is treated as the
+    same lineage, so the ids and the folding of what is already in a ledger do not move.
+    """
+    links = _advisory_links(case)
+    if not links:
+        return True
+    note = _advisory_link_note(impact)
+    return any(r.get("content_hash") == impact.advisory_hash
+               or r.get("note", "") in (note, f"{note} (unsigned CSAF import)")
+               for r in links)
+
+
+def _advisory_identity(store: CaseStore, impact: ImpactReport) -> tuple[str, str]:
+    """``(case id, trigger id)`` for this advisory report in this ledger.
+
+    A non-import advisory has always been keyed by its id alone, and those ids must not
+    move. But an id does not name a supplier: a second supplier's advisory that reuses an id
+    already held by a case about someone else's advisory (closed, rejected, deferred or
+    open) is a different advisory and gets its own case, named by its issuer. Which of the
+    two a report maps to is fixed by the ledger (the case that holds the plain id is the one
+    about its issuer), so assessing either again finds the same case and duplicates nothing.
+    An import's trigger already names its publisher.
+    """
+    trigger = _advisory_trigger(impact)
+    legacy = _case_id(TriggerType.SUPPLIER_ADVISORY, trigger)
+    if impact.advisory_import is not None:
+        return legacy, trigger
+    holder = store.get(legacy)
+    if holder is None or _concerns_issuer(holder, impact):
+        return legacy, trigger
+    own = f"{trigger} [advisory from {neutralise(impact.issued_by)}]"
+    return _case_id(TriggerType.SUPPLIER_ADVISORY, own), own
+
+
 def _name_problem(name: str) -> str:
     """Why ``name`` cannot be the name of a person, or ``""`` if it can (the shared rule)."""
     return actor_name_problem(name)
@@ -229,6 +276,38 @@ def _key(item: Mapping[str, object]) -> object:
 
 def _union(a: Sequence[str], b: Sequence[str]) -> tuple[str, ...]:
     return tuple(dict.fromkeys([*a, *b]))
+
+
+def _union_unknown(
+    a: Sequence[dict[str, object]], b: Sequence[dict[str, object]],
+) -> tuple[dict[str, object], ...]:
+    """Unknown machines by machine key; a row already on the case is kept as it is."""
+    out = list(a)
+    seen = {u.get("machine") for u in out}
+    out.extend(u for u in b if u.get("machine") not in seen)
+    return tuple(out)
+
+
+def _advisory_meta(existing: ChangeAssuranceCase, new: ChangeAssuranceCase) -> dict[str, str]:
+    """The advisory a case was opened on. Never replaced by a later reading; a case sealed
+    before this field existed gains it only when the reading is of the very document it
+    already links, so a re-issued advisory is not recorded as the one it was opened on."""
+    if existing.advisory:
+        return existing.advisory
+    opened_on = {r.get("content_hash") for r in _advisory_links(existing)}
+    if not opened_on or new.advisory.get("content_hash") in opened_on:
+        return new.advisory
+    return {}
+
+
+def _union_previous(
+    a: Sequence[dict[str, str]], b: Sequence[dict[str, str]],
+) -> tuple[dict[str, str], ...]:
+    """Previous verifications by entry; what the case already recorded is kept."""
+    out = list(a)
+    seen = {p.get("entry") for p in out}
+    out.extend(p for p in b if p.get("entry") not in seen)
+    return tuple(out)
 
 
 def _links_union(
@@ -342,6 +421,10 @@ def _merge(
             required_actions=_union(existing.required_actions, new.required_actions),
             human_decisions_required=_union(existing.human_decisions_required,
                                             fresh_decisions),
+            unknown_machines=_union_unknown(existing.unknown_machines, new.unknown_machines),
+            advisory=_advisory_meta(existing, new),
+            previous_verifications=_union_previous(existing.previous_verifications,
+                                                   new.previous_verifications),
             linked_evidence=_append_links(existing.linked_evidence, new.linked_evidence),
             checks_skipped=_union(existing.checks_skipped, new.checks_skipped),
             provenance={**new.provenance, **existing.provenance})
@@ -383,6 +466,13 @@ def _merge(
         required_actions=_union(existing.required_actions, added_actions),
         required_reverifications=reverifs,
         human_decisions_required=decisions,
+        unknown_machines=_union_unknown(existing.unknown_machines, new.unknown_machines),
+        advisory=_advisory_meta(existing, new),
+        # Only for entries this look adds: for one the case already tracks, today's coverage
+        # may include the verification this case itself asked for, which is not "previous".
+        previous_verifications=_union_previous(
+            existing.previous_verifications,
+            [p for p in new.previous_verifications if p.get("entry") in added_reverifs]),
         linked_evidence=(
             _append_links(existing.linked_evidence, new.linked_evidence)
             if existing.trigger_type is TriggerType.SUPPLIER_ADVISORY
@@ -436,6 +526,16 @@ def _recurrence(
         if extra:
             return ("the advisory now reaches machine(s) the "
                     f"{settled.status.value} case did not name: " + ", ".join(extra))
+        # The same supplier re-issued the id with different content: the person who settled
+        # the case did not decide on this document. (The SAME document, assessed again, is
+        # not a recurrence. An import is skipped: its text churns without the substance.)
+        old = {r.get("content_hash") for r in _advisory_links(settled)}
+        fresh = [r for r in _advisory_links(new)
+                 if not r.get("note", "").endswith("(unsigned CSAF import)")]
+        if old and fresh and not any(r.get("content_hash") in old for r in fresh):
+            return (f"the {settled.status.value} case was decided on a different document: "
+                    f"{fresh[0].get('note', 'advisory')} now has content "
+                    f"{fresh[0].get('content_hash', '')[:12]}")
     return ""
 
 
@@ -828,6 +928,7 @@ def assess_advisory(
     affected: list[str] = []
     evidence_before: dict[str, str] = {}
     required_reverifications: list[str] = []
+    previous: list[dict[str, str]] = []
     for exposure in impact.exposures:
         for f in exposure.functions:
             if f.function_id not in affected:
@@ -835,6 +936,9 @@ def assess_advisory(
             key = f"{exposure.machine_key}/{f.function_id}"
             evidence_before[key] = f.coverage_before.value
             required_reverifications.append(key)
+            if f.last_verified_at or f.last_verified_hash:
+                previous.append({"entry": key, "last_verified_at": f.last_verified_at,
+                                 "last_verified_hash": f.last_verified_hash})
 
     human_decisions: list[str] = []
     required_actions: list[str] = []
@@ -863,6 +967,23 @@ def assess_advisory(
             human_decisions.append(
                 f"{exposure.machine_key}/{exposure.item_id}: matched by "
                 f"{exposure.confidence} confidence only ({exposure.basis.value}).")
+    # A machine the assessment could neither include nor exclude is not a machine with no
+    # work: it is a machine nobody has answered for. It is named on the case with a question
+    # only a person can resolve, so a report whose only finding is "unknown" cannot reach
+    # ready_to_close (or be closed) without that answer on the record.
+    unknown_rows: list[dict[str, object]] = []
+    for c in impact.classifications:
+        if c.classification != "unknown" and not c.look_problems:
+            continue
+        reasons = tuple(dict.fromkeys(
+            neutralise(r) for r in (*c.unknown_reasons, *c.look_problems)))
+        unknown_rows.append({"machine": c.machine_key, "site": c.site,
+                             "reasons": list(reasons)})
+        human_decisions.append(
+            f"{c.machine_key}: this advisory could NOT be matched to or excluded from this "
+            f"machine ({'; '.join(reasons) or 'no reason recorded'}). Establish what it runs "
+            "(read the artefact hash from the machine and re-assess), or record why the "
+            "advisory does not apply to it. Until then it is neither affected nor clear.")
     for exposure in impact.exposures:
         for f in exposure.functions:
             key = f"{exposure.machine_key}/{f.function_id}"
@@ -880,10 +1001,11 @@ def assess_advisory(
             required_actions.append(action)
             actions_by_fid.setdefault(key, []).append(action)
 
+    case_id, trigger_id = _advisory_identity(store, impact)
     case = ChangeAssuranceCase(
-        case_id=advisory_case_id(impact),
+        case_id=case_id,
         trigger_type=TriggerType.SUPPLIER_ADVISORY,
-        trigger_id=_advisory_trigger(impact),
+        trigger_id=trigger_id,
         status=CaseStatus.OPEN,
         machines=impact.machines_affected,
         sites=tuple(dict.fromkeys(e.site for e in impact.exposures if e.site)),
@@ -895,6 +1017,16 @@ def assess_advisory(
         required_actions=tuple(dict.fromkeys(required_actions)),
         required_reverifications=tuple(dict.fromkeys(required_reverifications)),
         human_decisions_required=tuple(dict.fromkeys(human_decisions)),
+        unknown_machines=tuple(unknown_rows),
+        advisory={
+            "advisory_id": neutralise(impact.advisory_id),
+            "issued_by": neutralise(impact.issued_by),
+            "title": neutralise(impact.title),
+            "severity": impact.severity.value,
+            "reference": neutralise(impact.reference),
+            "content_hash": impact.advisory_hash,
+        },
+        previous_verifications=tuple(previous),
         linked_evidence=({"relation": "concerns", "content_hash": impact.advisory_hash,
                           "note": f"advisory {neutralise(impact.advisory_id)} from "
                                   f"{neutralise(impact.issued_by)}"
