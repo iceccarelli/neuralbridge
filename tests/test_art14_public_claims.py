@@ -25,9 +25,15 @@ SURFACES = [
     "app/lib/productPages.ts",
     "scripts/site_static/llms.txt.tmpl",
     "scripts/site_static/agent.json.tmpl",
+    "src/assurance/api/service.py",
+    "public/openapi.json",
+    "src/assurance/README.md",
 ]
 BANNED = re.compile(
     r"(clocks?|deadlines?)\s+(are\s+)?(computed|calculated)\s+correctly"
+    r"|computes?\s+(both\s+)?(the\s+)?(final[- ]report\s+)?(clocks?|deadlines?)\s+(correctly|accurately)"
+    r"|(platform|countdown)[^.\n]{0,40}\bis\s+wrong"
+    r"|does\s+not\s+yet\s+capture[^.\n]{0,80}(awareness|vulnerabilit)"
     r"|counter\s+defect\s+surfaced",
     re.I,
 )

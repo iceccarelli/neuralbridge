@@ -75,12 +75,15 @@ platform (Art. 14(1), (3), (7); Art. 16); this service files nothing.
 
 **What this service does that a spreadsheet cannot**
 
-* Records the awareness timestamp independently. The reporting platform does
-  not yet capture it for vulnerabilities and records *detection* for incidents,
-  and awareness is the fact every deadline runs from.
-* Computes both final-report clocks correctly: 14 days from a corrective **or
-  mitigating** measure for a vulnerability, one calendar month from
-  **submission** of the 72-hour notification for an incident.
+* Records the awareness moment with its reasoning. Awareness is the fact every deadline
+  runs from. The pinned platform field specification (Glossary v1.3) is older than the
+  live glossary (v1.6, which lists an awareness field for both tracks); a human must diff
+  and re-pin, so the register keeps its own record either way.
+* Computes the 24 h, 72 h, 14-day and one-month deadlines from the facts recorded (14 days
+  from a corrective **or mitigating** measure for a vulnerability, one month from
+  **submission** of the 72-hour notification for an incident) and shows the rule behind
+  each: provision, wording, counting rule, the record it runs from. The legal questions it
+  cannot settle are listed with every case.
 * Validates a draft submission against the platform's 39-field specification
   before anyone opens the platform.
 * Keeps every record in a hash-chained ledger, and refuses to export one that
