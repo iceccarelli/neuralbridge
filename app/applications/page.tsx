@@ -64,7 +64,7 @@ const APPLICATIONS: Application[] = [
     slug: 'oem-register',
     name: 'OEM Article 14 register',
     imageKey: 'card-plan-register',
-    summary: 'Both deadline clocks computed correctly, hash-chained ledger with verifiable export — the register itself, not a spreadsheet. Cases are not metered — no per-case cap or charge.',
+    summary: 'Deadline clocks computed from recorded facts with the rule shown, hash-chained ledger with verifiable export — the register itself, not a spreadsheet. Cases are not metered — no per-case cap or charge.',
     routes: [
       { method: 'GET', path: '/v1/register' },
       { method: 'GET', path: '/v1/cases' },

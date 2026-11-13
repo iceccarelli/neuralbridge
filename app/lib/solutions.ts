@@ -115,7 +115,7 @@ export const SOLUTIONS: SolutionPage[] = [
     ],
     proof: [
       { title: 'The free Article 14 validator', body: 'Checks a draft submission against the platform’s 39-field specification before you open the platform — in the offline kit or the Assurance API.', href: '/#products' },
-      { title: 'Both deadline clocks, computed correctly', href: '/docs/capabilities#service-art14', body: 'The Register tier tracks the 24-hour and final-report clocks together, with the reasoning that defends each filing.' },
+      { title: 'Deadline clocks, with the rule shown', href: '/docs/capabilities#service-art14', body: 'The Register tier tracks the 24-hour and final-report clocks together, with the reasoning that defends each filing.' },
       { title: 'Article 14 clocks, step by step', body: 'Awareness, triage reasoning and the deadline clocks, with the filing left to the manufacturer.', href: productHref('cra-article-14') },
     ],
     primaryCta: { label: 'Try the free Validator', href: '/#products' },

@@ -65,7 +65,7 @@ const products = [
     badge: '€390/mo',
     badgeClass: 'paid',
     name: 'Article 14 Register',
-    body: 'The CRA register for one manufacturer: both deadline clocks computed correctly, hash-chained ledger with verifiable export. Cases are not metered — no per-case cap or charge. Unvalidated list price.',
+    body: 'The CRA register for one manufacturer: deadline clocks computed from recorded facts with the rule behind each shown, hash-chained ledger with verifiable export. Cases are not metered — no per-case cap or charge. Unvalidated list price.',
     href: '#pricing',
     cta: 'See pricing',
     imageKey: 'card-plan-register',
