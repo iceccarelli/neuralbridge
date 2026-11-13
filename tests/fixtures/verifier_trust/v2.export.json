@@ -1,0 +1,234 @@
+{
+ "ledger_schema_version": 1,
+ "exported_at": "2026-11-12T21:52:17Z",
+ "subject": "",
+ "chain_verified": true,
+ "attestation": {
+  "ledger_schema_version": 1,
+  "length": 6,
+  "head_seq": 6,
+  "head_link_hash": "e51c2bf6a15ad1e71c30e6e6ab6ee62ec479b4e66e17cbc51fb7626ca1177d57",
+  "attested_at": "2026-11-12T21:52:17Z"
+ },
+ "entries": [
+  {
+   "seq": 1,
+   "at": "2026-11-12T21:52:16Z",
+   "kind": "t.record",
+   "subject": "CASE-0",
+   "content_hash": "c67a36f989ef600e7ecf9dfb39fd5d370944c6f4078ca5e72a61d818f2468524",
+   "prev_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+   "link_hash": "d78407ae2a8d85d8cd16ad243fff6a391620fb39f1b0625e32d23f90db74bf51",
+   "actor": "t.analyst",
+   "evidence": {
+    "actor": {
+     "identifier": "t.analyst",
+     "kind": "person",
+     "role": "analyst"
+    },
+    "body": {
+     "n": 0,
+     "note": "synthetic 0"
+    },
+    "checks_skipped": [],
+    "confidence": "none",
+    "content_hash": "c67a36f989ef600e7ecf9dfb39fd5d370944c6f4078ca5e72a61d818f2468524",
+    "kind": "t.record",
+    "origin": {
+     "method": "",
+     "reference": "",
+     "system": "fixture"
+    },
+    "recorded_at": "2026-11-12T21:52:16Z",
+    "relations": [],
+    "schema_version": "1",
+    "validation_state": "unverified"
+   }
+  },
+  {
+   "seq": 2,
+   "at": "2026-11-12T21:52:16Z",
+   "kind": "t.record",
+   "subject": "CASE-1",
+   "content_hash": "30f69051f7f6f2f89e862d768b1102d5cd03a0c3986cfc31037fe2e9ba6d0957",
+   "prev_hash": "d78407ae2a8d85d8cd16ad243fff6a391620fb39f1b0625e32d23f90db74bf51",
+   "link_hash": "c7fdbc235dab09d9d973c9ed42d5413939711be8bebacb46dbbc24a89d01996d",
+   "actor": "t.analyst",
+   "evidence": {
+    "actor": {
+     "identifier": "t.analyst",
+     "kind": "person",
+     "role": "analyst"
+    },
+    "body": {
+     "n": 1,
+     "note": "synthetic 1"
+    },
+    "checks_skipped": [],
+    "confidence": "none",
+    "content_hash": "30f69051f7f6f2f89e862d768b1102d5cd03a0c3986cfc31037fe2e9ba6d0957",
+    "kind": "t.record",
+    "origin": {
+     "method": "",
+     "reference": "",
+     "system": "fixture"
+    },
+    "recorded_at": "2026-11-12T21:52:16Z",
+    "relations": [],
+    "schema_version": "1",
+    "validation_state": "unverified"
+   }
+  },
+  {
+   "seq": 3,
+   "at": "2026-11-12T21:52:16Z",
+   "kind": "t.record",
+   "subject": "CASE-0",
+   "content_hash": "1197138b1109a154b68e62e2f6fa1a2a416d8668e9bb98cb49e00927d75ae5d2",
+   "prev_hash": "c7fdbc235dab09d9d973c9ed42d5413939711be8bebacb46dbbc24a89d01996d",
+   "link_hash": "5b1155ea43d16142e630da566f2cf6a6466389afaf087960fb991e2914813e39",
+   "actor": "t.analyst",
+   "evidence": {
+    "actor": {
+     "identifier": "t.analyst",
+     "kind": "person",
+     "role": "analyst"
+    },
+    "body": {
+     "n": 2,
+     "note": "synthetic 2"
+    },
+    "checks_skipped": [],
+    "confidence": "none",
+    "content_hash": "1197138b1109a154b68e62e2f6fa1a2a416d8668e9bb98cb49e00927d75ae5d2",
+    "kind": "t.record",
+    "origin": {
+     "method": "",
+     "reference": "",
+     "system": "fixture"
+    },
+    "recorded_at": "2026-11-12T21:52:16Z",
+    "relations": [],
+    "schema_version": "1",
+    "validation_state": "unverified"
+   }
+  },
+  {
+   "seq": 4,
+   "at": "2026-11-12T21:52:16Z",
+   "kind": "t.record",
+   "subject": "CASE-1",
+   "content_hash": "08dc30c7d9bad181699815e0f54d3ce27e1ad02d4f1545bd5c4af9df1d9d60ca",
+   "prev_hash": "5b1155ea43d16142e630da566f2cf6a6466389afaf087960fb991e2914813e39",
+   "link_hash": "6f04ff6be0291b5dd19b4d4b6eb0f28ee6f6a1ff6089bf36f933b2afbeab2a82",
+   "actor": "t.analyst",
+   "evidence": {
+    "actor": {
+     "identifier": "t.analyst",
+     "kind": "person",
+     "role": "analyst"
+    },
+    "body": {
+     "n": 3,
+     "note": "synthetic 3"
+    },
+    "checks_skipped": [],
+    "confidence": "none",
+    "content_hash": "08dc30c7d9bad181699815e0f54d3ce27e1ad02d4f1545bd5c4af9df1d9d60ca",
+    "kind": "t.record",
+    "origin": {
+     "method": "",
+     "reference": "",
+     "system": "fixture"
+    },
+    "recorded_at": "2026-11-12T21:52:16Z",
+    "relations": [],
+    "schema_version": "1",
+    "validation_state": "unverified"
+   }
+  },
+  {
+   "seq": 5,
+   "at": "2026-11-12T21:52:16Z",
+   "kind": "t.record",
+   "subject": "CASE-0",
+   "content_hash": "838435bbb560f0a1ae46a3b7307ecd9f8aa4dc7b93c008328681c440f5065d62",
+   "prev_hash": "6f04ff6be0291b5dd19b4d4b6eb0f28ee6f6a1ff6089bf36f933b2afbeab2a82",
+   "link_hash": "2e208cef5e82c99cdd1236ed5595faa6f7234916dd296b471780df6918efabc7",
+   "actor": "t.analyst",
+   "evidence": {
+    "actor": {
+     "identifier": "t.analyst",
+     "kind": "person",
+     "role": "analyst"
+    },
+    "body": {
+     "n": 4,
+     "note": "synthetic 4"
+    },
+    "checks_skipped": [],
+    "confidence": "none",
+    "content_hash": "838435bbb560f0a1ae46a3b7307ecd9f8aa4dc7b93c008328681c440f5065d62",
+    "kind": "t.record",
+    "origin": {
+     "method": "",
+     "reference": "",
+     "system": "fixture"
+    },
+    "recorded_at": "2026-11-12T21:52:16Z",
+    "relations": [],
+    "schema_version": "1",
+    "validation_state": "unverified"
+   }
+  },
+  {
+   "seq": 6,
+   "at": "2026-11-12T21:52:16Z",
+   "kind": "t.record",
+   "subject": "CASE-1",
+   "content_hash": "7df5c5745fcac7d27b195b44ec0c69ff91ea24faa08e54498492ce518f05aa5a",
+   "prev_hash": "2e208cef5e82c99cdd1236ed5595faa6f7234916dd296b471780df6918efabc7",
+   "link_hash": "e51c2bf6a15ad1e71c30e6e6ab6ee62ec479b4e66e17cbc51fb7626ca1177d57",
+   "actor": "t.analyst",
+   "evidence": {
+    "actor": {
+     "identifier": "t.analyst",
+     "kind": "person",
+     "role": "analyst"
+    },
+    "body": {
+     "n": 5,
+     "note": "synthetic 5"
+    },
+    "checks_skipped": [],
+    "confidence": "none",
+    "content_hash": "7df5c5745fcac7d27b195b44ec0c69ff91ea24faa08e54498492ce518f05aa5a",
+    "kind": "t.record",
+    "origin": {
+     "method": "",
+     "reference": "",
+     "system": "fixture"
+    },
+    "recorded_at": "2026-11-12T21:52:16Z",
+    "relations": [],
+    "schema_version": "1",
+    "validation_state": "unverified"
+   }
+  }
+ ],
+ "anchor": {
+  "format": "assurance.head-attestation.v2",
+  "sequence": 2,
+  "ledger_length": 6,
+  "head_seq": 6,
+  "head_link_hash": "e51c2bf6a15ad1e71c30e6e6ab6ee62ec479b4e66e17cbc51fb7626ca1177d57",
+  "basis": "read_from_ledger",
+  "attested_at": "2026-11-12T21:52:17Z",
+  "key_fingerprint": "83b8af727a2ee9ca",
+  "previous": "cf1f70fa4f8542bdceb4afdd90ead8189bed91c261b2d31958673e31ce2cd000",
+  "note": "",
+  "ledger_id": "1d4c26be171e480b94cd2161a4cf7494",
+  "tenant": "",
+  "signature": "+LzUkC+Qf7+kf/lREWyhK8W4DRqPuxpqwERIzG1EcumDdZNq9gMGH+pgCejtugfr1EEYF5vYFDYNoQAvs8g/Ag=="
+ }
+}

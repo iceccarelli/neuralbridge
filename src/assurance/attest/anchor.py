@@ -21,10 +21,12 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, cast
 
 from .attestation import HeadAttestation, select_anchor, verify_log
+from .custody import verify_log_across_rotation
 from .keys import VerifyingKey
+from .keyset import Keyset
 
 __all__ = ["ANCHOR_MEANING", "AnchorChoice", "choose_anchor", "describe_choice"]
 
@@ -48,12 +50,20 @@ class AnchorChoice:
 
 def choose_anchor(
     records: Sequence[HeadAttestation],
-    key: VerifyingKey | None,
+    key: VerifyingKey | Keyset | None,
     *,
     torn: bool = False,
     log_label: str = "the attestation log",
 ) -> AnchorChoice:
-    """The newest head in *records* that *key* verifiably signed, or the reasons not."""
+    """The newest head in *records* that *key* verifiably signed, or the reasons not.
+
+    *key* may be a :class:`~assurance.attest.keyset.Keyset`: a log that spans a rotation then
+    verifies record by record under the key each names, within that key's window, and still
+    yields an anchor after the service key changed. With one key, every record must be its.
+    """
+    keyset = key if isinstance(key, Keyset) else None
+    fp = ", ".join(keyset.fingerprints) if keyset is not None else (
+        key.fingerprint if key is not None else "")
     if key is None:
         return AnchorChoice(None, [
             "no service signing key is configured, so no attestation could be verified "
@@ -61,28 +71,30 @@ def choose_anchor(
     if torn:
         return AnchorChoice(None, [
             f"{log_label} ends in an unfinished line that may be the newest head; no "
-            "earlier record is used in its place"], key.fingerprint)
+            "earlier record is used in its place"], fp)
     if not records:
         return AnchorChoice(None, [
-            f"{log_label} holds no attestations (or does not exist)"], key.fingerprint)
-    verdict = verify_log(records, key)
+            f"{log_label} holds no attestations (or does not exist)"], fp)
+    verdict = (verify_log_across_rotation(records, keyset) if keyset is not None
+               else verify_log(records, cast(VerifyingKey, key)))
     if not verdict.ok:
         return AnchorChoice(None, [
-            f"{log_label} does not verify against the service key {key.fingerprint} "
-            f"({verdict.problems[0]}); nothing in it is used as an anchor"], key.fingerprint)
+            f"{log_label} does not verify against the service key {fp} "
+            f"({verdict.problems[0]}); nothing in it is used as an anchor"], fp)
     chosen = select_anchor(records)
     if chosen is None:
         return AnchorChoice(None, [
             f"{log_label} holds only heads declared by the account holder (a ledger the "
             "service never read); they describe the holder's own ledger and cannot "
-            "anchor this one"], key.fingerprint)
+            "anchor this one"], fp)
     # verify_log passed for every record, but the anchor is the thing everything rests
     # on, so its own signature is checked once more at the point of use.
-    if not chosen.verified_by(key):  # pragma: no cover - verify_log just proved it
+    entry = keyset.get(chosen.key_fingerprint) if keyset is not None else None
+    signer = entry.key if entry is not None else (None if keyset is not None else key)
+    if signer is None or not chosen.verified_by(signer):  # pragma: no cover - proved above
         return AnchorChoice(None, [
-            f"attestation {chosen.sequence} does not verify against the service key"],
-            key.fingerprint)
-    return AnchorChoice(chosen.to_dict(), [], key.fingerprint)
+            f"attestation {chosen.sequence} does not verify against the service key"], fp)
+    return AnchorChoice(chosen.to_dict(), [], fp)
 
 
 def describe_choice(choice: AnchorChoice) -> dict[str, Any] | None:

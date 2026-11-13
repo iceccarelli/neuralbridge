@@ -52,6 +52,7 @@ from assurance.attest.attestation import (
     attest,
 )
 from assurance.attest.keys import SigningKey
+from assurance.attest.keyset import Keyset
 from assurance.core.errors import AssuranceError
 from assurance.core.identity import parse_utc, utc_now
 from assurance.evidence.ledger import EvidenceLedger
@@ -186,7 +187,7 @@ def _is_plain_file(path: Path) -> tuple[bool, str]:
 
 def anchor_status(
     ledger: EvidenceLedger, log: AttestationLog, key: SigningKey, *,
-    max_age: timedelta, now: datetime,
+    max_age: timedelta, now: datetime, keyset: Keyset | None = None,
 ) -> tuple[str, str, dict[str, Any] | None]:
     """``(state, reason, anchor)`` for one ledger. The ledger's chain is NOT checked here.
 
@@ -195,7 +196,8 @@ def anchor_status(
     (verified, older than *max_age*), or ``none`` (no usable anchor; ``reason`` says why).
     """
     records, torn = log.scan()
-    choice = choose_anchor(records, key.verifying, torn=torn, log_label="the attestation log")
+    choice = choose_anchor(records, keyset if keyset is not None else key.verifying,
+                           torn=torn, log_label="the attestation log")
     if choice.anchor is None:
         return "none", "; ".join(choice.reasons), None
     anchor = choice.anchor
@@ -255,7 +257,8 @@ def _enumerate(tenants: Path) -> tuple[list[tuple[str, Path]], list[LedgerOutcom
 
 
 def _one(account: str, path: Path, logs: Path, key: SigningKey, *, max_age: timedelta,
-         dry_run: bool, now: datetime) -> LedgerOutcome:
+         dry_run: bool, now: datetime, keyset: Keyset | None = None,
+         rotating: bool = False) -> LedgerOutcome:
     name = path.name
     log_path = logs / f"{account}.jsonl"
     ok, why = _is_plain_file(log_path)
@@ -281,7 +284,8 @@ def _one(account: str, path: Path, logs: Path, key: SigningKey, *, max_age: time
     length, head_seq = len(entries), (entries[-1].seq if entries else 0)
     log = AttestationLog(log_path, label=f"the attestation log for {account}")
     try:
-        state, reason, _anchor = anchor_status(ledger, log, key, max_age=max_age, now=now)
+        state, reason, _anchor = anchor_status(ledger, log, key, max_age=max_age, now=now,
+                                              keyset=keyset)
         if state == "fresh":
             return LedgerOutcome(name, "fresh", reason, account, length, head_seq,
                                  _anchor["sequence"] if _anchor else None)
@@ -289,7 +293,7 @@ def _one(account: str, path: Path, logs: Path, key: SigningKey, *, max_age: time
             return LedgerOutcome(name, "would_anchor",
                                  f"{state}: {reason}; dry run, nothing written",
                                  account, length, head_seq)
-        record = attest(ledger, key, log, note="anchor-all", now=now)
+        record = attest(ledger, key, log, note="anchor-all", now=now, rotating=rotating)
     except AttestationBusyError as exc:
         return LedgerOutcome(name, "error", f"log busy; nothing signed ({type(exc).__name__})",
                              account_id=account)
@@ -307,9 +311,29 @@ def anchor_all(
     data_dir: str | Path, key: SigningKey, *,
     tenants_dir: str | Path | None = None, logs_dir: str | Path | None = None,
     max_age_hours: float = DEFAULT_MAX_AGE_HOURS, dry_run: bool = False,
-    now: datetime | None = None,
+    now: datetime | None = None, keyset: Keyset | None = None, rotating: bool = False,
 ) -> AnchorAllReport:
-    """Anchor every tenant ledger under *data_dir*; see the module docstring."""
+    """Anchor every tenant ledger under *data_dir*; see the module docstring.
+
+    After a key rotation a log holds records of two keys. ``keyset`` (the key history, with
+    the key being signed with as ``active``) lets the job verify such a log record by record
+    and tell a fresh anchor from a stale one; ``rotating`` acknowledges, as ``attest sign
+    --rotating`` does, that the log's last record names a different key. ``rotating``
+    without ``keyset`` is refused: the job could not tell a re-signed log from a stale one
+    and would append a record on every run.
+    """
+    if rotating and keyset is None:
+        raise ValueError(
+            "--rotating needs --keyset: without the key history the job cannot verify the "
+            "older records, so it could not tell a fresh anchor from a stale one and would "
+            "append a record to every log on every run. Nothing was signed.")
+    if keyset is not None:
+        mine = keyset.get(key.fingerprint)
+        if mine is None or mine.status != "active":
+            raise ValueError(
+                f"the key being signed with ({key.fingerprint}) is not an `active` key in the "
+                "keyset, so the records it signs could not be verified afterwards. Nothing "
+                "was signed.")
     tenants, logs = layout(data_dir, tenants_dir, logs_dir)
     moment = now or utc_now()
     max_age = timedelta(hours=max_age_hours)
@@ -317,7 +341,8 @@ def anchor_all(
     found, skipped = _enumerate(tenants)
     for account, path in found:
         report.outcomes.append(
-            _one(account, path, logs, key, max_age=max_age, dry_run=dry_run, now=moment))
+            _one(account, path, logs, key, max_age=max_age, dry_run=dry_run, now=moment,
+                 keyset=keyset, rotating=rotating))
     report.outcomes.extend(skipped)
     return report
 

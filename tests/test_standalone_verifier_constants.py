@@ -96,3 +96,44 @@ def test_the_standalone_file_accepts_a_v2_anchor_and_says_what_it_could_not_bind
     run = subprocess.run([sys.executable, str(SCRIPT), str(out), "--public-key", str(pub)],
                          capture_output=True, text=True)
     assert run.returncode == 1
+
+
+# --- the canonicalisation recipe documented in ATTEST.md is the recipe the code implements -------
+_VECTORS = [
+    ({"b": 1, "a": [2.5, -0.0, "é"], "c": {"z": 0.1234567}, "t": True},
+     '{"a":[2.5,0.0,"\\u00e9"],"b":1.0,"c":{"z":0.123457},"t":true}',
+     "8f45042f5f1c62124bab8111f7f69d43b09553a944a0e2fa41111f314e802bf8"),
+    ({"x": 10**16, "y": 1e-07, "n": None},
+     '{"n":null,"x":1e+16,"y":0.0}',
+     "fefde0fdef586a2ed3a1f5dcd293f7e26be012ae91936b7f0b56300945bf43fc"),
+]
+
+
+def test_the_documented_test_vectors_are_what_both_implementations_produce():
+    from assurance.core.identity import canonical_json
+    from assurance.evidence.ledger import LedgerEntry
+
+    s = _standalone()
+    doc = (Path(__file__).resolve().parents[1] / "deploy" / "assurance" / "ATTEST.md").read_text(
+        encoding="utf-8")
+    for value, canon, digest in _VECTORS:
+        assert canonical_json(value) == canon
+        assert content_hash_of(value) == digest == s.content_hash(value)
+        assert digest in doc and canon in doc
+    link = LedgerEntry(seq=1, at="2026-01-02T03:04:05Z", kind="t.record", subject="CASE-A",
+                       content_hash="a" * 64, prev_hash=GENESIS, link_hash="", actor="", payload={})
+    assert link.expected_link_hash() == "9a3020f18b95f8c255564b171c7a4f7e61d4fed65627009f87380457446aa613"
+    assert link.expected_link_hash() in doc
+
+
+def test_the_documented_attestation_bytes_are_what_the_signer_signs():
+    from assurance.attest.attestation import HeadAttestation
+
+    att = HeadAttestation(
+        format=ATTESTATION_FORMAT, sequence=1, ledger_length=3, head_seq=3, head_link_hash="b" * 64,
+        basis=AttestationBasis.READ_FROM_LEDGER, attested_at="2026-01-02T03:04:05Z",
+        key_fingerprint="0123456789abcdef", previous="", note="")
+    doc = (Path(__file__).resolve().parents[1] / "deploy" / "assurance" / "ATTEST.md").read_text(
+        encoding="utf-8")
+    shown = att.signed_payload().decode().replace("b" * 64, "bbbb...b (64)")
+    assert shown in doc

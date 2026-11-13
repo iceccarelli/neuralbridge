@@ -34,8 +34,9 @@ over a head this ledger can no longer produce.
 
 `assurance attest verify --log L --public-key K [--ledger DB]` establishes that the
 attestations in `L` are genuine (signatures, unbroken sequence, each naming its
-predecessor, lengths never decreasing, one key) and, with `--ledger`, that the ledger
-still contains every head `L` attests.
+predecessor, lengths never decreasing; one key, or, across a rotation, each record under the
+key it names: repeat `--public-key` or give a `--keyset`, see "Key history" below) and, with
+`--ledger`, that the ledger still contains every head `L` attests.
 
 It does **not** establish that `L` is the newest log. Whoever can write both the ledger
 and the log can truncate the ledger to an older signed head, cut the log back to the
@@ -65,11 +66,15 @@ assurance attest verify --log L --public-key K --ledger DB \
   same note appears in `checks_skipped` of the JSON output, and `remember_for_next_check`
   holds the values to keep. Keep them somewhere the ledger's operator cannot write.
 
-**A signed head names no tenant and no ledger.** The attested value is the sequence, length
-and head hash (plus basis, time and key), not an account or a ledger id, and the format is
-unchanged so that existing attestations keep verifying. A log from one account verifies
-against any ledger that contains those heads; keep one log per ledger and check them
-together. Records written after the newest signature are covered by no signature.
+**Which ledger a signed head describes.** A head read from a ledger that has a lineage id is
+signed as format `assurance.head-attestation.v2`: the ledger id (and the tenant, when given) is
+inside the signed bytes, so a head from tenant A's ledger cannot be replayed as tenant B's, and
+stripping the id changes the bytes. A ledger with no lineage id, and every counter-signature of a
+head somebody declared, is `v1`: **unbound**, a statement that a head with these numbers was signed,
+not that it was this ledger's. `verify` says which each record is (`binding`, `unbound`), `--ledger`
+or an expected ledger id compares the bound ones, and an *export bundle* names no ledger id, so
+whether a bound anchor describes the bundle's ledger is stated as not checked. Records written
+after the newest signature are covered by no signature.
 
 Reading is read-only: `verify`, `sign` and the other read verbs open the ledger without
 writing to it (no journal-mode change, no schema script, no ledger id minted, no `-wal` or
@@ -297,23 +302,93 @@ assurance attest sign \
   declared by the holder and not read from the ledger. A declared head over zero
   records anchors nothing and is refused.
 
+## Checking an exported bundle against what you remember
+
+`assurance evidence verify BUNDLE --public-key KEY.pub` shows a bundle agrees with a signed head.
+It cannot show it is the **newest**: a bundle cut back to any older genuine head, with the unsigned
+head record rewritten and the older anchor embedded, is consistent and anchored (reproduced: 13
+records, signed at 11 and at 13, last two deleted: `VERIFIED - anchored ... 11 entries`, exit 0).
+Only your own record of the last check closes it, so a passing anchored check prints
+
+```
+KEEP FOR YOUR NEXT CHECK ... --min-sequence 2 --expect-head 3f9c...(64 hex) --min-length 13
+```
+
+and `evidence verify` (and `scripts/verify_export_standalone.py`) take them back:
+
+* `--min-sequence N`: the bundle's newest signed head must be attestation N or later;
+* `--expect-head HASH` (12+ hex): that head must still be in the bundle's chain;
+* `--min-length N`: the chain must be at least N records; a shorter one says how many were removed;
+* `--max-age HOURS`: the signed head must have been signed within that time.
+
+A violated value is exit 1 (the headline names the attestation, seq, head and age it rests on).
+A value that cannot be compared (a subject export without a skeleton has no complete chain to look in)
+is exit 3, never a pass. They need `--public-key` or `--keyset`. The values are the *export's* anchor
+(the signer's `read_from_ledger` head); a hosted account's log also holds `declared_by_holder`
+records with their own sequence numbers, so keep the values `evidence verify` printed, not those of
+`attest verify`, for exports.
+
+**`--expect-fingerprint FP`** (on `evidence verify`, `attest verify` and the standalone file; repeat
+it for several keys) is the signing key's fingerprint as you wrote it down from a source other than
+the bundle. Without it a forged shorter ledger signed with the forger's key verifies "anchored" when
+you are handed the forger's public key. With it a different key, or a record signed by a key you did
+not list, is exit 1. A fingerprint is 16 hex characters, **64 bits** of SHA-256 over the raw public
+key: it catches a swapped or mistyped key and is a weaker defence against a deliberately ground-out
+one; compare the whole key file where the stakes justify it. (The format is unchanged.)
+
+### Key history: `--keyset`
+
+After a rotation the old key still signed every earlier anchor. A verifier holding only today's key
+(`--public-key` once) still calls an earlier-era anchor a *foreign anchor*, exit 1, as before. For a
+history, keep a **keyset**: a public-key-only JSON file `assurance.attest.keyset.v1` with each key's
+fingerprint, PEM, `status` (`active`, `retired`, `revoked`) and `effective_from` / `effective_until`
+(UTC, `YYYY-MM-DDTHH:MM:SSZ`; a retired key needs its end, an active one has none).
+
+```bash
+assurance attest keyset add --keyset keys.json --public-key old.pub --fingerprint <FP you wrote down> \
+    --status retired --effective-from 2025-01-01T00:00:00Z --effective-until 2026-06-01T00:00:00Z --label "first era"
+assurance attest keyset add --keyset keys.json --public-key new.pub --fingerprint <FP> \
+    --status active --effective-from 2026-06-01T00:00:00Z
+assurance attest keyset check --keyset keys.json
+assurance evidence verify BUNDLE --keyset keys.json [--attestations MY.jsonl]
+assurance attest verify --log L --keyset keys.json
+```
+
+The key that checks an anchor is the one whose fingerprint the anchor names, from this file, never
+from the bundle. A **revoked** key's anchor is a problem whatever date it carries; an anchor dated
+outside a **retired** key's window is a problem; a fingerprint **not in the file** is *not
+established* (exit 3), because it may be a genuine anchor from a key you hold no record of; it is
+neither a forgery finding nor a pass. Repeating `--public-key` (two or more) is a keyset without
+history. The loader fails closed: it refuses private key material, a repeated JSON name, an unknown
+field, a wrong type, a fingerprint that is not the key's, a repeated key, a bad date and any other
+format version. An anchor's date is the signer's own claim, so a window makes a retired key's honest
+anchors checkable and cannot expose a leaked key's forged ones.
+
 ## Checking an export without our software
 
-An auditor who does not want to install or trust this package can check a whole-ledger export with one
-file, `scripts/verify_export_standalone.py`: Python standard library only, readable end to end, no network.
+An auditor who does not want to install or trust this package can check an export with one
+file, `scripts/verify_export_standalone.py`: Python standard library only (plus `cryptography` for the
+signature), readable end to end, no network.
 
 ```bash
 python verify_export_standalone.py export.json                         # internal consistency; exit 3
-python verify_export_standalone.py export.json --public-key signer.pub # + completeness; needs `cryptography`
+python verify_export_standalone.py export.json --public-key signer.pub # + completeness
+python verify_export_standalone.py export.json --keyset keys.json --attestations mine.jsonl \
+    --expect-fingerprint <FP> --min-sequence 2 --expect-head 3f9c... --min-length 13 --max-age 26
 ```
 
-Exit 0 only with a trusted public key and a signed head the signer *read from the ledger*. Without a key it
-says "completeness not checked" (exit 3): anyone holding the file can rebuild a consistent chain with entries
-left out, and the exporter's own head record can be rewritten to match. It is deliberately narrower than the
-product's verifier (whole-ledger exports of schema 1 only; anything else is exit 3, never a pass). The
-independent test suite (`neuralbridge-stress-test`, `tests/test_standalone_verifier.py`) checks that it is
-never more lenient than the product's verifier across the tamper matrix, including a forgery in which every
-hash is recomputed and only the signed head exposes it.
+Exit codes: **0** only with a key and a signed head the signer *read from the ledger* covering every
+record, with every remembered value met; **1** the file contradicts itself or a signed statement
+(edited, rebuilt, cut, a rollback, a substituted key, a revoked key); **2** not a readable export, or
+an unreadable keyset or attestation log; **3** nothing wrong was found but something is not
+established. Without a key it says "completeness not checked" (exit 3). A **subject-only export** (what
+`GET /v1/cases/{id}/export` emits) is checked entry by entry and is **exit 3**: it cannot be shown
+complete by this file, with or without a skeleton, and it is never reported as a removed record. It is
+deliberately narrower than the product's verifier (schema 1 only; it never merges a skeleton; anything
+it does not understand is exit 3, never a pass). The independent test suite
+(`neuralbridge-stress-test`, `tests/test_standalone_verifier.py`) checks that it is never more lenient
+than the product's verifier across the tamper matrix, and `tests/test_standalone_verifier_parity.py`
+here runs each input class through both and compares the exit codes.
 
 ## Deploying the counter-signer
 
@@ -337,6 +412,52 @@ second party.
 A key file that is present but unsafe (group/other access, a symlink, another account's
 file, or a directory group/other can write) is refused too: **503** with
 `attestation_key_unsafe`, distinct from `no_attestation_key_configured`.
+
+## Canonicalisation and hashing recipe
+
+Everything signed or chained here is a SHA-256 over a **canonical JSON** string, produced by
+`assurance.core.identity.canonical_json`. It is the recipe of this implementation, **not** RFC 8785
+(JCS): a reimplementation in another language must reproduce these steps exactly, including the ways
+it differs from JCS.
+
+1. Every number, integer or float, becomes `round(float(v), 6)`; negative zero becomes `0.0`;
+   booleans are not numbers. So `1` hashes as `1.0`, `1` and `1.0` hash alike, and an integer
+   beyond 2^53 or a fraction finer than 6 places is indistinguishable from its neighbour (the
+   verifier reports such a number as unestablished).
+2. Objects are written with keys sorted by Python's string order (code points), recursively.
+3. `json.dumps(..., sort_keys=True, separators=(",", ":"), default=str)`: no whitespace; strings
+   are **ASCII-only** (every non-ASCII character is `\uXXXX`, lower-case hex, surrogate pairs above
+   U+FFFF; `ensure_ascii` is the default); floats use **Python's `repr`** (`1e+16`, `0.1`, `1e-05`),
+   where JCS would write `10000000000000000`.
+4. The string is encoded UTF-8 and hashed with SHA-256; the hex digest is the content / link hash.
+5. A signature (Ed25519, 64 bytes, base64 in the record) is over the **canonical bytes themselves**,
+   not over their hash.
+
+What is hard-wired, with no algorithm identifier in any artefact: SHA-256; Ed25519; the format
+strings `assurance.head-attestation.v1` / `.v2`, `assurance.attest.keyset.v1`, and ledger schema
+version 1 (checked as `ledger_schema_version`); key fingerprint = first 16 hex characters of SHA-256
+over the raw 32-byte public key. A different hash, curve or canonicalisation must be introduced as
+a **new format version** (a new format string that the old verifier does not know): an old verifier
+refuses an unknown format by name (a bundle with another `ledger_schema_version` or an anchor with
+another `format` is "not one of ..." / exit 1 or 3, never a guess), and no format may be changed in
+place.
+
+Test vectors, generated by the code above (`tests/test_standalone_verifier_constants.py` pins them
+and the standalone file reproduces them):
+
+| # | input | canonical bytes | SHA-256 |
+|--|--|--|--|
+| 1 | `{"b": 1, "a": [2.5, -0.0, "é"], "c": {"z": 0.1234567}, "t": true}` | `{"a":[2.5,0.0,"\u00e9"],"b":1.0,"c":{"z":0.123457},"t":true}` | `8f45042f5f1c62124bab8111f7f69d43b09553a944a0e2fa41111f314e802bf8` |
+| 2 (not JCS) | `{"x": 10000000000000000, "y": 1e-07, "n": null}` | `{"n":null,"x":1e+16,"y":0.0}` | `fefde0fdef586a2ed3a1f5dcd293f7e26be012ae91936b7f0b56300945bf43fc` |
+| 3 (a ledger link) | seq 1, at `2026-01-02T03:04:05Z`, kind `t.record`, subject `CASE-A`, content_hash `aaaa...a` (64), prev_hash = 64 zeros | `{"at":"2026-01-02T03:04:05Z","content_hash":"` + 64 `a` + `","kind":"t.record","prev_hash":"` + 64 `0` + `","seq":1.0,"subject":"CASE-A"}` | `9a3020f18b95f8c255564b171c7a4f7e61d4fed65627009f87380457446aa613` |
+
+Vector 4 is the byte string an attestation signature covers (a `v1` record, then base64 of the
+Ed25519 signature over exactly these bytes; `sequence`, `head_seq`, `ledger_length` are `1.0`, `3.0`,
+`3.0` in it):
+
+```
+{"attested_at":"2026-01-02T03:04:05Z","basis":"read_from_ledger","format":"assurance.head-attestation.v1","head_link_hash":"bbbb...b (64)","head_seq":3.0,"key_fingerprint":"0123456789abcdef","ledger_length":3.0,"note":"","previous":"","sequence":1.0}
+```
 
 ## What none of this establishes
 

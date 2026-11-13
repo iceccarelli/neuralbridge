@@ -1,0 +1,68 @@
+{
+ "v1 whole with key": {
+  "anchor_sequence": 1,
+  "completeness": "anchored",
+  "entries": 3,
+  "file": "v1.export.json",
+  "ok": true,
+  "problems": [],
+  "pub": "v1.signer.pub",
+  "scope": "whole ledger",
+  "unestablished": []
+ },
+ "v1 whole without key": {
+  "anchor_sequence": null,
+  "completeness": "not_checked",
+  "entries": 3,
+  "file": "v1.export.json",
+  "ok": true,
+  "problems": [],
+  "pub": null,
+  "scope": "whole ledger",
+  "unestablished": []
+ },
+ "v2 subject, partial with key": {
+  "anchor_sequence": 1,
+  "completeness": "anchored_partial",
+  "entries": 3,
+  "file": "v2.subject.export.json",
+  "ok": true,
+  "problems": [],
+  "pub": "v2.signer.pub",
+  "scope": "subject 'CASE-0'",
+  "unestablished": []
+ },
+ "v2 subject, partial without key": {
+  "anchor_sequence": null,
+  "completeness": "not_checked",
+  "entries": 3,
+  "file": "v2.subject.export.json",
+  "ok": true,
+  "problems": [],
+  "pub": null,
+  "scope": "subject 'CASE-0'",
+  "unestablished": []
+ },
+ "v2 whole with key": {
+  "anchor_sequence": 2,
+  "completeness": "anchored",
+  "entries": 6,
+  "file": "v2.export.json",
+  "ok": true,
+  "problems": [],
+  "pub": "v2.signer.pub",
+  "scope": "whole ledger",
+  "unestablished": []
+ },
+ "v2 whole without key": {
+  "anchor_sequence": null,
+  "completeness": "not_checked",
+  "entries": 6,
+  "file": "v2.export.json",
+  "ok": true,
+  "problems": [],
+  "pub": null,
+  "scope": "whole ledger",
+  "unestablished": []
+ }
+}

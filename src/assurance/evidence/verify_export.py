@@ -72,22 +72,27 @@ nothing asked for was left undone" and nothing more: read ``completeness`` besid
 from __future__ import annotations
 
 import json
+import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from assurance.core.evidence import indistinguishable_numbers
-from assurance.core.identity import parse_utc
+from assurance.core.identity import parse_utc, utc_now
+from assurance.core.text import neutralise
 from assurance.evidence.ledger import GENESIS, LEDGER_SCHEMA_VERSION, LedgerEntry
 
 if TYPE_CHECKING:  # the Ed25519 dependency is only needed when a key is supplied
     from assurance.attest.keys import VerifyingKey
+    from assurance.attest.keyset import Keyset
 
 __all__ = ["ANCHORED", "ANCHORED_PARTIAL", "ANCHOR_CLOCK_SKEW_SECONDS", "ASSUMPTIONS",
-           "DECLARED_HEAD", "FAILED", "MAX_PROBLEMS", "NOT_CHECKED",
-           "ExportVerification", "verify_export", "verify_export_file"]
+           "DECLARED_HEAD", "FAILED", "FINGERPRINT_BITS_NOTE", "MAX_PROBLEMS", "NOT_CHECKED",
+           "DuplicateKeyError", "ExportVerification", "loads_no_duplicate_keys",
+           "normalise_expect_head", "normalise_fingerprints", "verify_export",
+           "verify_export_file"]
 
 #: ``ExportVerification.completeness``: is it shown that nothing was removed?
 ANCHORED = "anchored"        # a signed anchor, under a trusted key, covers the whole chain
@@ -145,6 +150,115 @@ _SAME_PARTY = (
     "and pass it as well (`--attestations`).")
 
 
+#: Said wherever a key's fingerprint is used to pick or confirm a key. The format is the
+#: signed attestation's own (16 hex characters of SHA-256 over the raw public key) and is not
+#: changed here; what it is worth is stated instead.
+FINGERPRINT_BITS_NOTE = (
+    "A key fingerprint is 16 hex characters: 64 bits of SHA-256 over the raw public key. "
+    "That catches a swapped or mistyped key; it is a weaker defence against someone who "
+    "deliberately grinds out a key with a chosen fingerprint, which is expensive but not "
+    "impossible. Where the stakes justify it, compare the whole public key file as well.")
+
+_HEX = frozenset("0123456789abcdef")
+
+
+class DuplicateKeyError(ValueError):
+    """A JSON object names the same member twice."""
+
+
+def _refuse_duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    seen: dict[str, Any] = {}
+    for name, value in pairs:
+        if name in seen:
+            raise DuplicateKeyError(
+                f"a JSON object repeats the name {neutralise(name[:40])!r}. Parsers disagree "
+                "about which of two values counts (this one keeps the last, others the first), "
+                "so a file that says one thing to one reader and another to the next is refused")
+        seen[name] = value
+    return seen
+
+
+def loads_no_duplicate_keys(text: str) -> Any:
+    """``json.loads`` that refuses an object with a repeated member name.
+
+    Every file this module reads is evidence about what somebody said. A decoy first
+    ``entries`` that one parser keeps and another overwrites is how two readers are shown two
+    different files; this is the one place that closes it for the bundle, the attestation log
+    and the keyset.
+    """
+    return json.loads(text, object_pairs_hook=_refuse_duplicates)
+
+
+def normalise_expect_head(value: object) -> str:
+    """A remembered head link hash (12 or more hex characters), lower-cased; else ``ValueError``."""
+    want = str(value).strip().lower()
+    if len(want) < 12 or len(want) > 64 or not set(want) <= _HEX:
+        raise ValueError("expect_head must be a hex head link hash (12 to 64 characters).")
+    return want
+
+
+def normalise_fingerprints(values: object) -> tuple[str, ...]:
+    """The key fingerprints the caller wrote down (16 hex characters each); else ``ValueError``."""
+    out: list[str] = []
+    for raw in (values if isinstance(values, (list, tuple)) else (values,)):
+        fp = str(raw).strip().lower()
+        if len(fp) != 16 or not set(fp) <= _HEX:
+            raise ValueError(
+                f"{str(raw)[:40]!r} is not a key fingerprint: it is 16 hex characters "
+                "(what `attest keygen` prints).")
+        if fp not in out:
+            out.append(fp)
+    return tuple(out)
+
+
+@dataclass(frozen=True)
+class Expectations:
+    """What the caller remembers from an earlier check, held against the signed anchor.
+
+    ``min_sequence`` / ``expect_head`` / ``max_age`` mean what they mean for
+    ``assurance attest verify``: the newest signed head this bundle rests on must be at least
+    that new, the head remembered must still be in the bundle's chain, and the head must
+    have been signed recently. ``min_length`` is the ledger length (records) seen last time,
+    so a violation can say how many were removed. ``fingerprints`` are the signing keys the
+    caller wrote down elsewhere.
+    """
+
+    min_sequence: int | None = None
+    expect_head: str | None = None
+    max_age: timedelta | None = None
+    min_length: int | None = None
+    now: datetime | None = None
+    fingerprints: tuple[str, ...] = ()
+
+    @classmethod
+    def checked(
+        cls, *, min_sequence: int | None = None, expect_head: str | None = None,
+        max_age: timedelta | None = None, min_length: int | None = None,
+        now: datetime | None = None, expect_fingerprints: Sequence[str] | str | None = None,
+    ) -> Expectations:
+        """Validate what a caller passed (``ValueError`` on nonsense: never a silent default)."""
+        for name, number in (("min_sequence", min_sequence), ("min_length", min_length)):
+            if number is not None and (
+                    isinstance(number, bool) or not isinstance(number, int) or number < 1):
+                raise ValueError(f"{name} must be a whole number of at least 1.")
+        if max_age is not None and (
+                not isinstance(max_age, timedelta) or not math.isfinite(max_age.total_seconds())
+                or max_age.total_seconds() <= 0):
+            raise ValueError("max_age must be a positive duration.")
+        return cls(
+            min_sequence, None if expect_head is None else normalise_expect_head(expect_head),
+            max_age, min_length, now,
+            () if expect_fingerprints is None else normalise_fingerprints(
+                [expect_fingerprints] if isinstance(expect_fingerprints, str)
+                else list(expect_fingerprints)))
+
+    @property
+    def wants_anchor(self) -> bool:
+        """True when something was asked that only a verified signed head can answer."""
+        return any(v is not None for v in (
+            self.min_sequence, self.expect_head, self.max_age, self.min_length))
+
+
 @dataclass(frozen=True)
 class ExportVerification:
     """The outcome of checking one bundle. ``ok`` is only the checks that ran."""
@@ -175,6 +289,10 @@ class ExportVerification:
     #: ``ok`` is false while any is open. Kept apart from ``problems`` so a genuine
     #: file is never reported as one that "is not what the exporter wrote".
     unestablished: tuple[str, ...] = field(default_factory=tuple)
+    #: What to pass at the next check so a bundle cut back to an older signed head cannot
+    #: pass (``min_sequence`` / ``expect_head`` / ``min_length``). Set only when the result is
+    #: ``ok`` and rests on a signed anchor.
+    remember: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {"ok": self.ok, "entries": self.entries, "scope": self.scope,
@@ -185,7 +303,8 @@ class ExportVerification:
                 "assumptions": list(self.assumptions),
                 "head": self.head,
                 "completeness": self.completeness,
-                "anchor": self.anchor}
+                "anchor": self.anchor,
+                "remember_for_next_check": self.remember}
 
     def text(self) -> str:
         if self.problems:
@@ -193,24 +312,50 @@ class ExportVerification:
         elif not self.ok:
             head = ("NOT ESTABLISHED (no inconsistency found, but a check that was "
                     "asked for could not be completed)")
+        elif self.completeness == ANCHORED and self.anchor:
+            head = f"VERIFIED — anchored to a signed head ({_anchor_brief(self.anchor)})"
         elif self.completeness == ANCHORED:
             head = "VERIFIED — anchored to a signed head"
         elif self.completeness == ANCHORED_PARTIAL and self.anchor:
             after = self.anchor["records_after_anchor"]
             head = (f"CONSISTENT, SIGNED ONLY UP TO seq {self.anchor['head_seq']} — "
-                    f"{after} record(s) after it are covered by no signature")
+                    f"{after} record(s) after it are covered by no signature "
+                    f"({_anchor_brief(self.anchor)})")
         elif self.completeness == DECLARED_HEAD:
             head = ("CONSISTENT, HEAD ONLY DECLARED — the signer was told the head "
                     "and never read the chain; completeness NOT shown")
         else:
             head = "VERIFIED (internal consistency only; completeness NOT CHECKED)"
         lines = [f"{head} — {self.entries} entries, scope: {self.scope}"]
+        if self.ok and self.remember and self.anchor:
+            lines.append("  KEEP FOR YOUR NEXT CHECK  (so a bundle cut back to an older signed "
+                         "head is caught)  --min-sequence "
+                         f"{self.remember['min_sequence']} --expect-head "
+                         f"{self.remember['expect_head']} --min-length "
+                         f"{self.remember['min_length']}")
         lines += [f"  CHECKED  {v}" for v in self.verified]
         lines += [f"  PROBLEM  {p}" for p in self.problems]
         lines += [f"  NOT ESTABLISHED  {u}" for u in self.unestablished]
         lines += [f"  ASSUMED  {a}" for a in self.assumptions]
         lines += [f"  NOT CHECKED  {c}" for c in self.checks_skipped]
-        return "\n".join(lines)
+        # The file chose many of these words (a key fingerprint, a subject, an actor): none may
+        # reach a terminal as an escape sequence or start a line of its own.
+        return "\n".join(neutralise(line) for line in lines)
+
+
+def _age(attested_at: str, now: datetime) -> str:
+    try:
+        hours = (now - parse_utc(attested_at)).total_seconds() / 3600
+    except (ValueError, TypeError, OverflowError):
+        return "age unknown"
+    return f"{hours:.1f} h ago"
+
+
+def _anchor_brief(anchor: Mapping[str, Any]) -> str:
+    """The signed head a verdict rests on, in one phrase: which attestation, which head, how old."""
+    return (f"attestation {anchor['sequence']}, seq {anchor['head_seq']}, head "
+            f"{_short(anchor['head_link_hash'])}, signed {anchor['attested_at']}, "
+            f"{anchor.get('age', 'age unknown')}")
 
 
 def _exact_int(value: Any) -> bool:
@@ -248,8 +393,20 @@ def _not_a_ledger_export(document: object) -> str:
 def verify_export(
     bundle: Any, *, trusted_key: VerifyingKey | None = None,
     anchors: Sequence[Mapping[str, Any] | Any] = (),
+    min_sequence: int | None = None, expect_head: str | None = None,
+    max_age: timedelta | None = None, min_length: int | None = None,
+    now: datetime | None = None, expect_fingerprints: Sequence[str] | str | None = None,
+    keyset: Keyset | None = None,
 ) -> ExportVerification:
     """Verify an exported bundle. Never raises on a malformed one: it reports.
+
+    ``keyset`` (instead of ``trusted_key``; both is a ``ValueError``) is the caller's record
+    of several keys and when each was in force (``assurance.attest.keyset``). The key that
+    checks an anchor is the one whose fingerprint the anchor names; an anchor naming a key
+    that is not in the keyset is *not established* (it may be genuine, from a key the caller
+    holds no record of), a revoked key's anchor, or one dated outside a retired key's window,
+    is a problem. With a single ``trusted_key`` an anchor from any other key is a foreign
+    anchor and a problem, exactly as before.
 
     ``trusted_key`` is an Ed25519 public key the caller obtained **outside** the
     bundle. With it the bundle's embedded ``anchor`` (and any ``anchors`` the
@@ -257,7 +414,24 @@ def verify_export(
     the bundle is checked against them; a bundle that carries none, or cannot be
     shown complete, is then reported as a problem rather than a pass. Without it
     completeness is reported ``not_checked``.
+
+    The remaining arguments are what the caller *remembers* from an earlier check, and
+    they close the one hole a signed anchor leaves: a bundle cut back to ANY older signed
+    head is still genuine, consistent and anchored. ``min_sequence`` is the newest
+    attestation sequence seen last time and ``expect_head`` its head link hash (12+ hex
+    characters); ``min_length`` is the ledger length seen; ``max_age`` bounds how old the
+    signed head may be (measured at ``now``, default the present). A bundle that breaks one is a
+    problem (exit 1 in the CLI), with the number of attestations or records missing where
+    that is known. ``expect_fingerprints`` are the signing keys the caller wrote down
+    elsewhere: a supplied key, or an anchor's signer, that is not one of them is a problem
+    (key substitution). Nonsense arguments raise ``ValueError``; none of this applies without a
+    trusted key, and asking for it without one is reported as not established.
     """
+    if keyset is not None and trusted_key is not None:
+        raise ValueError("pass trusted_key or keyset, not both")
+    expect = Expectations.checked(
+        min_sequence=min_sequence, expect_head=expect_head, max_age=max_age,
+        min_length=min_length, now=now, expect_fingerprints=expect_fingerprints)
     problems: list[str] = []
     unestablished: list[str] = []
     total = 0
@@ -289,7 +463,7 @@ def verify_export(
     ]
     if not isinstance(bundle, dict) or not isinstance(bundle.get("entries"), list):
         return ExportVerification(False, 0, "unknown",
-                                  (_not_a_ledger_export(bundle),),
+                                  (neutralise(_not_a_ledger_export(bundle)),),
                                   tuple(skipped), (), ASSUMPTIONS)
 
     subject = bundle.get("subject", "")
@@ -471,9 +645,33 @@ def verify_export(
     # -- completeness: only ever against a signed anchor, under a key the caller holds
     known = {e.seq: e.link_hash for e in entries}
     chain_len = max(links) if links else 0
+    if expect.fingerprints:
+        if trusted_key is None and keyset is None:
+            cannot("A key fingerprint was expected, but no trusted public key was supplied to "
+                   "compare it with.")
+        elif keyset is not None:
+            absent = [fp for fp in expect.fingerprints if keyset.get(fp) is None]
+            if absent:
+                bad("fingerprint",
+                    f"your keyset does not hold the key(s) you expected ({', '.join(absent)}); "
+                    f"it holds {', '.join(keyset.fingerprints)}. This is not the keyset you "
+                    "were given, or a key was swapped out of it.")
+        elif trusted_key is not None and (
+                trusted_key.fingerprint not in expect.fingerprints
+                or len(expect.fingerprints) > 1):
+            bad("fingerprint",
+                f"the public key supplied has fingerprint {trusted_key.fingerprint}, but you "
+                f"expected {', '.join(expect.fingerprints)}. Either this is not the key you "
+                "were given or it was swapped for another; nothing signed by it is to be "
+                "trusted.")
     completeness, anchor_info, anchor_facts, anchor_assumptions = _check_anchors(
         bundle, anchors, trusted_key, links, known, chain_len, why_unknown, bad, cannot,
-        skipped, times)
+        skipped, times, expect, keyset)
+    if expect.wants_anchor and completeness == NOT_CHECKED:
+        cannot("A remembered head, sequence, length or age was given and was NOT checked: "
+               + ("no trusted public key was supplied, so there is no signed anchor to hold it "
+                  "against." if trusted_key is None and keyset is None else
+                  "no verified signed anchor covers this bundle to hold it against."))
 
     anchored = completeness in (ANCHORED, ANCHORED_PARTIAL)
     if whole:
@@ -566,10 +764,23 @@ def verify_export(
     if total and completeness in (ANCHORED, ANCHORED_PARTIAL, DECLARED_HEAD):
         completeness = NOT_CHECKED  # a bundle with problems is not shown complete
         anchor_info = None
+    if anchor_info is not None:
+        anchor_info = {k: neutralise(v) if isinstance(v, str) else v
+                       for k, v in anchor_info.items()}
+    remember = None
+    if ok and anchor_info is not None and completeness in (ANCHORED, ANCHORED_PARTIAL):
+        remember = {"min_sequence": anchor_info["sequence"],
+                    "expect_head": anchor_info["head_link_hash"], "min_length": chain_len}
+
+    def safe(lines: Sequence[str]) -> tuple[str, ...]:
+        # Text that came out of the file (a fingerprint, a subject, an actor, a time) is
+        # shown, never obeyed: unsafe characters become visible escapes.
+        return tuple(neutralise(line) for line in lines)
+
     return ExportVerification(
-        ok, n, scope, tuple(problems), tuple(skipped), tuple(verified),
-        (*ASSUMPTIONS, *anchor_assumptions), head if total == 0 and whole else None,
-        completeness, anchor_info if total == 0 else None, tuple(unestablished))
+        ok, n, neutralise(scope), safe(problems), safe(skipped), safe(verified),
+        safe((*ASSUMPTIONS, *anchor_assumptions)), head if total == 0 and whole else None,
+        completeness, anchor_info if total == 0 else None, safe(unestablished), remember)
 
 
 def _merge_skeleton(
@@ -694,10 +905,82 @@ def _dated_after(att: Any, times: dict[int, str]) -> str:
     return ""
 
 
+def _expectation_violations(
+    expect: Expectations, best: Any, links: dict[int, str] | None, chain_len: int,
+    moment: datetime, why_unknown: str, cannot: Any,
+) -> list[str]:
+    """What the caller remembers, held against the signed head the verdict rests on.
+
+    Each message is a finding, not a warning: every signature here is genuine, which is
+    exactly why only the caller's own memory can show the bundle was cut back to an older
+    signed head. Whatever cannot be compared (no complete chain to look in) is reported as
+    not established through ``cannot``, never as a pass.
+    """
+    out: list[str] = []
+    seen = (f"attestation {best.sequence} (seq {best.head_seq}, signed {best.attested_at})")
+    if expect.min_sequence is not None and best.sequence < expect.min_sequence:
+        missing = expect.min_sequence - best.sequence
+        out.append(
+            f"rollback or withheld newer anchor: the newest signed head this bundle rests on "
+            f"is {seen}, but you saw attestation {expect.min_sequence} before ({missing} newer "
+            "attestation(s) than this bundle carries). The bundle was cut back to an older "
+            "signed head, or its newer anchor was removed; every signature on it is still "
+            "genuine, which is why nothing but your own record shows it.")
+    if expect.expect_head is not None:
+        if links is None:
+            cannot("The head you remembered could not be looked for: this bundle has no "
+                   f"complete chain to look in ({why_unknown or 'see the findings'}).")
+        elif not any(h.startswith(expect.expect_head) for h in links.values()):
+            out.append(
+                f"rollback: the head you remembered ({expect.expect_head[:12]}) is not in this "
+                f"bundle's chain, which ends at seq {chain_len}. Records were removed from the "
+                "end of the bundle, or it is another ledger's.")
+    if expect.min_length is not None:
+        if links is None:
+            cannot("The ledger length you remembered could not be compared: this bundle has "
+                   f"no complete chain ({why_unknown or 'see the findings'}).")
+        elif chain_len < expect.min_length:
+            out.append(
+                f"{expect.min_length - chain_len} record(s) removed: you saw a ledger of at "
+                f"least {expect.min_length} record(s) and this bundle's chain ends at seq "
+                f"{chain_len}.")
+    if expect.max_age is not None:
+        try:
+            age = moment - parse_utc(best.attested_at)
+        except (ValueError, TypeError, OverflowError):
+            age = None
+        if age is None or age > expect.max_age:
+            how = ("its signing time is not a timestamp" if age is None else
+                   f"it is {age.total_seconds() / 3600:.1f} h old, over the allowed "
+                   f"{expect.max_age.total_seconds() / 3600:g} h")
+            out.append(f"the newest signed head ({seen}) is too old: {how}. Signing has "
+                       "stopped, or a newer anchor is being withheld.")
+    return out
+
+
+def _expectation_facts(expect: Expectations, best: Any, chain_len: int) -> list[str]:
+    """Plain-language facts for the remembered values that were given and held."""
+    facts: list[str] = []
+    if expect.min_sequence is not None:
+        facts.append(f"the newest signed head here is attestation {best.sequence}, at least "
+                     f"the attestation {expect.min_sequence} you remembered")
+    if expect.expect_head is not None:
+        facts.append(f"the head you remembered ({expect.expect_head[:12]}) is in this bundle's "
+                     "chain")
+    if expect.min_length is not None:
+        facts.append(f"the bundle's chain runs to seq {chain_len}, at least the "
+                     f"{expect.min_length} record(s) you remembered")
+    if expect.max_age is not None:
+        facts.append(f"the newest signed head was signed within the last "
+                     f"{expect.max_age.total_seconds() / 3600:g} h")
+    return facts
+
+
 def _check_anchors(
     bundle: dict[str, Any], external: Sequence[Any], key: VerifyingKey | None,
     links: dict[int, str] | None, known: dict[int, str], chain_len: int,
     why_unknown: str, bad: Any, cannot: Any, skipped: list[str], times: dict[int, str],
+    expect: Expectations = Expectations(), keyset: Keyset | None = None,
 ) -> tuple[str, dict[str, Any] | None, list[str], list[str]]:
     """Judge completeness. Returns ``(completeness, anchor, facts, assumptions)``.
 
@@ -714,7 +997,7 @@ def _check_anchors(
 
     why = (f"Why there is no complete chain to compare with: {why_unknown}."
            if why_unknown else "")
-    if key is None:
+    if key is None and keyset is None:
         if raws:
             skipped.insert(0, (
                 "COMPLETENESS NOT CHECKED: a signed anchor was supplied or embedded, "
@@ -751,6 +1034,8 @@ def _check_anchors(
 
     passed: list[Any] = []
     failures = 0
+    deferred = 0
+    used: set[str] = set()
 
     def reject(message: str) -> None:
         nonlocal failures
@@ -762,7 +1047,7 @@ def _check_anchors(
             data = raw.to_dict() if hasattr(raw, "to_dict") else raw
             if not isinstance(data, Mapping):
                 raise AttestationError("not an object")
-            att = HeadAttestation.from_dict(dict(data))
+            att = HeadAttestation.from_dict(dict(data), reject_unknown=True)
         except (AttestationError, ValueError, TypeError, KeyError, OverflowError) as exc:
             # OverflowError: `int(1e999)` / `int(inf)` on a number the file chose.
             reject(f"{label} is not a readable head attestation ({exc})")
@@ -772,19 +1057,43 @@ def _check_anchors(
                    f"{' / '.join(KNOWN_ATTESTATION_FORMATS)}; "
                    "its signature cannot be checked here")
             continue
-        if att.key_fingerprint != key.fingerprint:
-            reject(f"{label} was signed by key {att.key_fingerprint}, not the "
-                   f"trusted key {key.fingerprint} — a foreign anchor anchors "
-                   "nothing")
-            continue
+        if keyset is None:
+            assert key is not None
+            if att.key_fingerprint != key.fingerprint:
+                reject(f"{label} was signed by key {att.key_fingerprint}, not the "
+                       f"trusted key {key.fingerprint} — a foreign anchor anchors "
+                       "nothing")
+                continue
+            use, named = key, key.fingerprint
+        else:
+            entry = keyset.get(att.key_fingerprint)
+            if entry is None:
+                deferred += 1
+                cannot(f"{label} was signed by key {att.key_fingerprint}, which is not in your "
+                       f"keyset ({', '.join(keyset.fingerprints)}). It may be genuine and from "
+                       "a key you hold no record of (an earlier key era), or a forgery: "
+                       "nothing here can tell, so it anchors nothing. Add the key's public "
+                       "half to your keyset if you can obtain it from a source other than "
+                       "this bundle.")
+                continue
+            if expect.fingerprints and entry.fingerprint not in expect.fingerprints:
+                reject(f"{label} was signed by key {entry.fingerprint}, which is not one you "
+                       f"expected ({', '.join(expect.fingerprints)})")
+                continue
+            why_not = entry.judge(att.attested_at)
+            if why_not:
+                reject(f"{label}: {why_not}")
+                continue
+            use, named = entry.key, entry.fingerprint
         try:
-            signature_ok = att.verified_by(key)
+            signature_ok = att.verified_by(use)
         except AttestationError:
             signature_ok = False
         if not signature_ok:
             reject(f"{label}: the signature does not verify against the trusted "
-                   f"key {key.fingerprint} — the anchor was edited or forged")
+                   f"key {named} — the anchor was edited or forged")
             continue
+        used.add(named)
         # The signature is genuine. Whose ledger does it say it is? A bound head names the
         # ledger id it was read from; the bundle names the ledger it was exported from.
         # The bundle format deliberately carries no ledger id, so a bound head's ledger cannot be
@@ -830,6 +1139,8 @@ def _check_anchors(
 
     if failures:
         return FAILED, None, [], []  # each failure was reported where it was found
+    if not passed and deferred:
+        return NOT_CHECKED, None, [], []     # each unknown signer was reported where found
     if not passed:
         # Every anchor was genuine and none contradicted the bundle, but there was no
         # complete chain to hold them against: asked for, and not established.
@@ -857,22 +1168,39 @@ def _check_anchors(
         return NOT_CHECKED, None, [], []
     best = max(read or declared, key=lambda a: (a.head_seq, a.sequence))
     after = chain_len - best.head_seq
+    moment = expect.now if expect.now is not None else utc_now()
     info = {
         "sequence": best.sequence, "key_fingerprint": best.key_fingerprint,
         "attested_at": best.attested_at, "basis": best.basis.value,
         "ledger_length": best.ledger_length, "head_seq": best.head_seq,
         "head_link_hash": best.head_link_hash, "records_after_anchor": after,
+        "age": _age(best.attested_at, moment),
     }
-    assumptions = [_KEY_PROVENANCE, _SAME_PARTY]
+    violations = _expectation_violations(
+        expect, best, links, chain_len, moment, why_unknown, cannot)
+    if violations:
+        for message in violations:
+            bad("expectation", message)
+        return FAILED, None, [], []
+    signers = (f"your keyset ({', '.join(sorted(used))})" if keyset is not None
+               else f"the public key you supplied (fingerprint {key.fingerprint})")
+    assumptions = [_KEY_PROVENANCE, _SAME_PARTY, FINGERPRINT_BITS_NOTE]
+    if keyset is not None:
+        assumptions.append(
+            "The keyset file is the trust anchor here: its statuses and dates are whatever "
+            "its author wrote, and an anchor's date is the signer's own claim, so a window "
+            "makes a retired key's honest anchors checkable but cannot expose a leaked "
+            "key's forged ones.")
+    kept = _expectation_facts(expect, best, chain_len)
     if not read:
         facts = [
-            f"{len(passed)} signed attestation(s) verify against the public key you "
-            f"supplied (fingerprint {key.fingerprint})",
+            f"{len(passed)} signed attestation(s) verify against {signers}",
             f"the bundle's chain runs to seq {chain_len}, at least the "
             f"{best.ledger_length} record(s) the signer was told of, and its link at "
             f"seq {best.head_seq} ({_short(best.head_link_hash)}) is the head the "
             "signer was told, with no record under it dated after it was signed — "
             "so the bundle does not contradict what was declared",
+            *kept,
         ]
         skipped.insert(0, (
             "COMPLETENESS NOT CHECKED: the only signed head that agrees with this "
@@ -888,14 +1216,14 @@ def _check_anchors(
             "this is the ledger the head belongs to, or that nothing is missing.")
         return DECLARED_HEAD, info, facts, assumptions
     facts = [
-        f"{len(passed)} signed anchor(s) verify against the public key you supplied "
-        f"(fingerprint {key.fingerprint})",
+        f"{len(passed)} signed anchor(s) verify against {signers}",
         f"the bundle's chain runs to seq {chain_len}, at least the "
         f"{best.ledger_length} record(s) signed for, and its link at seq "
         f"{best.head_seq} ({_short(best.head_link_hash)}) is the signed head — so "
         f"nothing up to seq {best.head_seq} was removed or rewritten",
         f"the signer read that head from the ledger (basis {best.basis.value}), and no "
         "record under it is dated after it was signed",
+        *kept,
     ]
     skipped.insert(0, (
         f"{after} record(s) after the anchor (seq {best.head_seq + 1}"
@@ -909,17 +1237,26 @@ def _check_anchors(
 def verify_export_file(
     path: str | Path, *, trusted_key: VerifyingKey | None = None,
     anchors: Sequence[Any] = (),
+    min_sequence: int | None = None, expect_head: str | None = None,
+    max_age: timedelta | None = None, min_length: int | None = None,
+    now: datetime | None = None, expect_fingerprints: Sequence[str] | str | None = None,
+    keyset: Keyset | None = None,
 ) -> ExportVerification:
     try:
-        bundle = json.loads(Path(path).read_text(encoding="utf-8"))
+        bundle = loads_no_duplicate_keys(Path(path).read_text(encoding="utf-8"))
     except RecursionError:
         return _too_deep()
+    except DuplicateKeyError as exc:
+        return ExportVerification(False, 0, "unknown", (f"cannot read the bundle: {exc}",), ())
     except (OSError, ValueError) as exc:
         return ExportVerification(False, 0, "unknown",
                                   (f"cannot read the bundle: {type(exc).__name__}",),
                                   ())
     try:
-        return verify_export(bundle, trusted_key=trusted_key, anchors=anchors)
+        return verify_export(
+            bundle, trusted_key=trusted_key, anchors=anchors, min_sequence=min_sequence,
+            expect_head=expect_head, max_age=max_age, min_length=min_length, now=now,
+            expect_fingerprints=expect_fingerprints, keyset=keyset)
     except RecursionError:
         # Parsed, but the analysis walks the structure too and the file chose its depth.
         return _too_deep()

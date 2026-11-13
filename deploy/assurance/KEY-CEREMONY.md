@@ -18,6 +18,7 @@ Everything below uses commands in this repository. `python -m assurance attest �
 | `keygen --out F [--public-out F.pub] [--json]` | Ed25519 pair; private file created `0600` exclusively; **refuses to overwrite** either file, or to sit beside the ledger; prints the public fingerprint, never the key | 0 / 2 |
 | `sign … --key F` | refuses a key file readable by group or other (or a symlink) | 0 / 1 finding / 2 |
 | `verify --log L --public-key P [--public-key P2 …]` | repeat `--public-key` to check a log that spans a rotation; every record must verify under the pinned key it names | 0 / 1 / 2 / 3 |
+| `keyset add \| check --keyset F` | the verifier's key history, public keys only (section 6a); `add` refuses a key that does not hash to the fingerprint you wrote down, `check` loads the file exactly as the verifiers do | 0 / 2 |
 | `trust-list create \| add \| revoke \| list \| verify-file` | the recorder trust file, in exactly the format the server loads; writers take an exclusive lock on `<trustfile>.lock` (0600) so two operators cannot overwrite each other's revocation | 0 / 1 / 2 |
 | `preflight [--key F] [--trust F] [--expect-fingerprint FP] [--must-be-revoked FP] [--require both\|counter-signing\|validated\|none] [--json]` | would each capability work *here*; prints the public fingerprint and what it did **not** check | 0 / 1 |
 
@@ -162,7 +163,40 @@ A rotation is a **new identity**, not a continuation.
    `python -m assurance attest verify --log L --public-key old.pub --public-key new.pub [--ledger …]`.
    A record signed by a key you did not pin is a finding; a key is never read from the log.
    A verifier holding only the new key sees the earlier span as unverified, on purpose.
+   For a history that outlives one rotation, keep a keyset file (section 6a).
 6. Run section 5 again. The tests that pin this: `TestServiceKeyRotation`.
+
+### 6a. The key-history duty: a keyset file (public keys only)
+
+Keeping the old public key "indefinitely" (step 2) is a duty with a failure mode: a key kept in
+somebody's mailbox is a key nobody can use in five years. Write the history into one file the
+verifiers read, `assurance.attest.keyset.v1`, **at every rotation and revocation**, and keep a copy
+with the decision record (section 9) and another where auditors can fetch it by a route you do not
+sign with the key itself.
+
+```bash
+python -m assurance attest keyset add --keyset ./ceremony/keys.json --public-key old.pub \
+    --fingerprint <the old fingerprint you wrote down> --status retired \
+    --effective-from <when it began to sign> --effective-until <the last moment it signed> --label "service key 1"
+python -m assurance attest keyset add --keyset ./ceremony/keys.json --public-key new.pub \
+    --fingerprint <the new fingerprint> --status active --effective-from <when it began to sign>
+python -m assurance attest keyset check --keyset ./ceremony/keys.json
+```
+
+- **Public keys only.** The file is refused whole if any private key material is in it (the loader
+  does not distinguish an accident from an attack): if one ever lands there, treat that key as burned
+  and rotate. Never paste a `.pem` private key into it, into a ticket or into chat.
+- `--fingerprint` is mandatory and is the value you recorded at the ceremony, not one read off the
+  key: a key that does not hash to it is refused, which is how a swapped file is caught.
+- `retired` needs the last moment the key signed (`effective_until`); an anchor dated later than that
+  is reported as a problem, not a pass. Set it a few minutes after the final signature, not before.
+- A **compromised** key is `revoked`, not retired: every anchor under it is a problem whatever date it
+  carries, because the signer chooses the date it writes. Re-anchor under the new key.
+- Verifiers use it with `evidence verify --keyset`, `attest verify --keyset` and the standalone
+  file. A fingerprint that is not in the file is *not established* (exit 3), so a customer who has
+  not received your latest keyset sees the new era as unestablished, never as a pass.
+- After a rotation the operator's timer continues the same logs with
+  `attest anchor-all --key new.pem --keyset ./ceremony/keys.json --rotating` (section 11).
 
 ## 7. Revoke
 
@@ -296,13 +330,23 @@ prove the job runs (only a stale anchor shows that: `preflight --anchors` report
 and an operator who controls the deployment can rewrite a ledger and its log together. It is
 as independent of the operator as the custody of the key.
 
-**Rotation.** The verify route accepts an account's log only if *every* record verifies under
-the one service key it holds. After a rotation (section 6) every existing log therefore
-fails under the new key, completeness reads `not_checked` with the reason, and `anchor-all`
-refuses to continue those logs ("a different key"). Nothing already signed is wrong; it is
-verifiable only with the old public key. Before switching, verify each log with both keys
-pinned (section 6 step 5), archive it with the old public key, and start a fresh log under
-the new key; until then the older anchors do not count. Decide that cut-over deliberately.
+**Rotation.** The hosted verify route accepts an account's log only if *every* record verifies
+under the one service key it holds (`GET /v1/ledger/verify` is not changed by this procedure; it
+needs a change in the API to read a keyset). After a rotation (section 6) every existing log
+therefore fails under the new key there, completeness reads `not_checked` with the reason, and
+`anchor-all` **without** `--keyset` refuses to continue those logs ("a different key"). Nothing
+already signed is wrong; it is verifiable with the old public key. Two ways to cut over:
+
+1. Keep the logs and continue them: write the keyset (section 6a) with the old key `retired` and the
+   new key `active`, then run `attest anchor-all --data-dir /data --key new.pem --keyset keys.json
+   --rotating` once. `--rotating` is the same acknowledgement as `attest sign --rotating`; it is
+   refused without `--keyset`, because without the history the job could not tell a fresh anchor
+   from a stale one and would append a record to every log on every run. The new key must be
+   `active` in the keyset. Later runs need only `--keyset` (and find the anchors fresh).
+2. Archive each log with the old public key (verify with both keys pinned, section 6 step 5) and
+   start a fresh log under the new key.
+
+Decide that cut-over deliberately.
 
 ## What remains operator-only (not done, not doable from this repository)
 
