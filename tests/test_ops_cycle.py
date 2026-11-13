@@ -353,6 +353,56 @@ def test_dry_run_plan_says_the_watch_ledger_is_verified_only(site, capsys):
     assert "not anchored, not backed up" in out
 
 
+def test_an_anchor_landing_during_a_backup_does_not_make_the_backup_look_tampered(
+        site, tmp_path, capsys, monkeypatch):
+    """The ledger snapshot must be taken AFTER the attestation logs are copied.
+
+    Deterministic, not a race: a hook fires right after the FIRST of the two steps (log copy,
+    ledger snapshot) finishes and lands a new record plus the anchor that attests to it, as a
+    counter-sign arriving mid-backup would. Logs copied after the ledger snapshot then attest to
+    a record the snapshot lacks: 'N record(s) were removed after being attested'.
+    """
+    import shutil
+
+    from assurance.attest import cli as attest_cli
+
+    anchor = ["anchor-all", "--data-dir", str(site.data), "--key", str(site.key),
+              "--max-age", "0.0001", "--json"]
+    assert attest_cli.main(anchor) == 0                  # the log exists before the backup
+    capsys.readouterr()
+    ledger = EvidenceLedger(site.data / "tenants" / f"{site.accounts[0]}.db")
+    fired: list[str] = []
+
+    def land_an_anchor(step: str) -> None:
+        if not fired:
+            fired.append(step)
+            ledger.append(_ev(99), subject="CASE-1")
+            assert attest_cli.main(anchor) == 0
+            capsys.readouterr()
+
+    real_snapshot, real_copytree = restore_check._snapshot, shutil.copytree
+
+    def snapshot(src, dest):
+        real_snapshot(src, dest)
+        if Path(src).parent.name == "tenants":
+            land_an_anchor("ledger")
+
+    def copytree(src, dest, *a, **k):
+        out = real_copytree(src, dest, *a, **k)
+        land_an_anchor("log")
+        return out
+
+    monkeypatch.setattr(restore_check, "_snapshot", snapshot)
+    monkeypatch.setattr(restore_check.shutil, "copytree", copytree)
+    out = tmp_path / "bk"
+    restore_check.backup(site.data, out)
+
+    manifest = json.loads((out / "backup-manifest.json").read_text())
+    assert manifest["degraded"] is False and manifest["source_findings"] == []
+    assert fired == ["log"], "the logs must be copied before any ledger is snapshotted"
+    assert restore_check.verify(out)["ok"] is True
+
+
 def test_a_backup_that_does_not_verify_fails_the_cycle(site, capsys, monkeypatch):
     real = restore_check.verify
 
