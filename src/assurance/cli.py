@@ -101,7 +101,8 @@ def main(argv: list[str] | None = None) -> int:
         code = _run(args)
         # Output is block-buffered on a pipe: a reader that left early fails here, not in
         # the print that produced the text. Flush inside the guard so both cases end alike.
-        sys.stdout.flush()
+        if sys.stdout is not None:      # `>&-`: nothing to flush; the verdict is still the code
+            sys.stdout.flush()
         return code
     except BrokenPipeError:
         # `assurance ... | head`: the reader left while we were printing. Whatever the

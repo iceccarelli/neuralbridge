@@ -147,3 +147,34 @@ def test_an_interrupt_or_an_exit_is_not_swallowed(files, monkeypatch, signal):
     monkeypatch.setattr(module, name, go)
     with pytest.raises(signal):
         main(argv)
+
+
+# ---------------------------------------------------------------------------------------------
+# a closed or vanished reader is not a failure of the command (F11)
+# ---------------------------------------------------------------------------------------------
+def test_closed_stdout_keeps_the_real_exit_code(files, monkeypatch):
+    """`>&-` leaves sys.stdout None; the flush raised AttributeError AFTER the work was done."""
+    import sys
+
+    monkeypatch.setattr(sys, "stdout", None)
+    assert main(["capabilities", "--check"]) in (0, 1)
+    assert main(["no-such-domain"]) == 2
+
+
+def test_ops_status_into_a_closed_pipe_ends_quietly_not_as_could_not_run(files, monkeypatch, capsys):
+    import assurance.ops.cli as ops_cli
+
+    (files / "data").mkdir()
+    (files / "ops.json").write_text(json.dumps({
+        "schema": "neuralbridge-ops/1", "ops_id": "t", "data_dir": "data",
+        "record": "ops/cycles.jsonl", "backup_dir": "backups"}))
+
+    def pipe(*a, **k):
+        raise BrokenPipeError(32, "Broken pipe")
+
+    monkeypatch.setattr(ops_cli, "_cmd_status", pipe)
+    from assurance.cli import EXIT_BROKEN_PIPE
+    capsys.readouterr()
+    code = main(["ops", "status", "--config", str(files / "ops.json")])
+    assert code == EXIT_BROKEN_PIPE
+    assert "Broken pipe" not in capsys.readouterr().err

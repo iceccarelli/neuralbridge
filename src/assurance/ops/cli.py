@@ -347,6 +347,10 @@ def main(argv: list[str] | None = None) -> int:
         return {"cycle": _cmd_cycle, "status": _cmd_status,
                 "check": _cmd_check,
                 "notify-test": _cmd_notify_test}[args.command](args)
+    except BrokenPipeError:
+        # `ops status | head`: not a config or file problem. Whatever a cycle seals is sealed
+        # before it prints; the dispatcher ends quietly (141) instead of "error: Broken pipe".
+        raise
     except (AssuranceError, OSError, ValueError) as exc:
         # A config the loader refused, or a file it could not use: "could not run" (2), with no
         # side effect (the loader runs before the lock, the clock or any write).
