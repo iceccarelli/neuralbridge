@@ -586,3 +586,74 @@ class TestProbeWithNothingToCompare:
         rc = collect_main(["probe", str(plan), "--first", str(root), "--second", str(root)])
         assert rc == 1
         assert "STABLE" not in capsys.readouterr().out.split("\n")[0]
+
+
+# =====================================================================
+# Hand-edited files: the message names the file and field and the remedy.
+# =====================================================================
+class TestDiagnosticsForHandEditedFiles:
+    def _run(self, tmp_path, capsys, cmd="run"):
+        capsys.readouterr()
+        extra = ["--out", str(tmp_path / "out")] if cmd == "run" else []
+        rc = run_cli(cmd, str(tmp_path / "kit.json"), *extra)
+        cap = capsys.readouterr()
+        return rc, cap.out + cap.err
+
+    def _plan(self, tmp_path, mutate):
+        path = tmp_path / "plans" / "cell.json"
+        body = json.loads(path.read_text())
+        mutate(body)
+        path.write_text(json.dumps(body))
+
+    def test_a_plan_syntax_error_names_the_file_and_leaves_no_empty_ledger(
+            self, tmp_path, capsys):
+        make_kit(tmp_path)
+        (tmp_path / "plans" / "cell.json").write_text('{"plan_id": ')
+        rc, text = self._run(tmp_path, capsys)
+        assert rc == 2
+        assert "cell.json" in text and "not valid JSON" in text
+        db = tmp_path / "out" / "evidence.db"
+        assert not db.exists() or EvidenceLedger(db).entries()    # never an empty ledger
+
+    def test_an_unknown_item_kind_lists_the_valid_ones(self, tmp_path, capsys):
+        make_kit(tmp_path)
+        self._plan(tmp_path, lambda b: b["items"][0].update(kind="bogus"))
+        rc, text = self._run(tmp_path, capsys)
+        assert rc == 2
+        assert "ITM-ZONES" in text and "'bogus'" in text
+        assert "firmware" in text and "safety_program" in text
+
+    def test_a_missing_plan_id_is_named_not_a_keyerror(self, tmp_path, capsys):
+        make_kit(tmp_path)
+        self._plan(tmp_path, lambda b: b.pop("plan_id"))
+        rc, text = self._run(tmp_path, capsys)
+        assert rc == 2 and "missing plan_id" in text and "KeyError" not in text
+
+    def test_a_machine_without_exports_does_not_blame_the_serial(self, tmp_path, capsys):
+        kit = make_kit(tmp_path)
+        body = json.loads(kit.read_text())
+        del body["machines"][0]["exports"]
+        kit.write_text(json.dumps(body))
+        rc, text = self._run(tmp_path, capsys)
+        assert rc == 2 and "missing exports" in text
+        assert "no serial" not in text and "AR7-1001" in text
+
+    @pytest.mark.parametrize("target", ["kit.json", "plans/cell.json"])
+    @pytest.mark.parametrize("how,phrase", [
+        ("bom", "byte-order mark"), ("utf16", "UTF-16"), ("dup", "appears twice")])
+    def test_encoding_and_duplicate_key_faults_name_the_file_and_the_remedy(
+            self, tmp_path, capsys, target, how, phrase):
+        make_kit(tmp_path)
+        path = tmp_path / target
+        text = path.read_text()
+        if how == "bom":
+            path.write_bytes(b"\xef\xbb\xbf" + text.encode())
+        elif how == "utf16":
+            path.write_bytes(text.encode("utf-16"))
+        else:
+            key = '"organisation"' if target == "kit.json" else '"manufacturer"'
+            path.write_text(text.replace(key, '"x": 1, ' + key + ': "first", ' + key, 1))
+        rc, out = self._run(tmp_path, capsys, "check")
+        assert rc != 0
+        assert phrase in out and path.name in out
+        assert "codec" not in out and "Traceback" not in out

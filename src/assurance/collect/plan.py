@@ -31,11 +31,52 @@ from assurance.core.errors import AssuranceError
 from assurance.core.identity import content_hash_of
 from assurance.machinery.manifest import ItemKind, SafetyFunction
 
-__all__ = ["CollectionPlan", "ItemSpec", "PlanError", "VersionSource"]
+__all__ = ["CollectionPlan", "ItemSpec", "PlanError", "VersionSource", "read_json_object"]
 
 
 class PlanError(AssuranceError):
     """A plan is malformed, or would produce a manifest that lies."""
+
+
+def _no_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in out:
+            raise ValueError(f"the key {key!r} appears twice in one object")
+        out[key] = value
+    return out
+
+
+def read_json_object(path: str | Path, label: str,
+                     error: type[AssuranceError] = PlanError) -> dict[str, Any]:
+    """A JSON object from a hand-edited file, or *error* naming the file and the remedy.
+
+    Refuses what a person typing in an editor produces by accident and the parser would
+    otherwise swallow: a repeated key (the last would silently win), a byte-order mark or
+    UTF-16 (Notepad's "Unicode"), text that is not UTF-8.
+    """
+    p = Path(path)
+    raw = p.read_bytes()
+    if raw[:3] == b"\xef\xbb\xbf":
+        raise error(f"{p.name} (the {label}) starts with a byte-order mark. Save it again as "
+                    "UTF-8 without BOM (in Notepad: Save As, Encoding: UTF-8).")
+    if raw[:2] in (b"\xff\xfe", b"\xfe\xff"):
+        raise error(f"{p.name} (the {label}) is saved as UTF-16. Save it again as UTF-8 "
+                    "(in Notepad: Save As, Encoding: UTF-8).")
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise error(f"{p.name} (the {label}) is not UTF-8 text (byte {exc.start}). Save it "
+                    "again as UTF-8.") from exc
+    try:
+        data = json.loads(text, object_pairs_hook=_no_duplicate_keys)
+    except ValueError as exc:      # includes JSONDecodeError and the duplicate-key refusal
+        raise error(f"{p.name} (the {label}) is not valid JSON: {exc}. Fix it, or start "
+                    "again from `assurance kit init`.") from exc
+    if not isinstance(data, dict):
+        raise error(f"{p.name} (the {label}) must contain a JSON object, not "
+                    f"{type(data).__name__}.")
+    return data
 
 
 @dataclass(frozen=True)
@@ -154,8 +195,21 @@ class ItemSpec:
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> ItemSpec:
+        where = f"item {d.get('item_id', '?')!r}" if isinstance(d, dict) else "an item"
+        if not isinstance(d, dict):
+            raise PlanError(f"{where} must be an object, not {type(d).__name__}.")
+        missing = [k for k in ("item_id", "kind", "name", "source") if k not in d]
+        if missing:
+            raise PlanError(f"{where} is missing {', '.join(missing)}. Every item needs "
+                            "item_id, kind, name and source.")
+        try:
+            kind = ItemKind(str(d["kind"]))
+        except ValueError as exc:
+            raise PlanError(
+                f"{where}: kind {d['kind']!r} is not one of "
+                + ", ".join(k.value for k in ItemKind) + ".") from exc
         return cls(
-            item_id=str(d["item_id"]), kind=ItemKind(str(d["kind"])),
+            item_id=str(d["item_id"]), kind=kind,
             name=str(d["name"]), source=str(d["source"]),
             supplier=str(d.get("supplier", "")),
             implements=tuple(str(f) for f in (d.get("implements") or ())),
@@ -165,6 +219,14 @@ class ItemSpec:
             required=bool(d.get("required", True)),
             notes=str(d.get("notes", "")),
         )
+
+
+def _functions(raw: Any) -> tuple[SafetyFunction, ...]:
+    try:
+        return tuple(SafetyFunction.from_dict(f) for f in (raw or ()))
+    except (KeyError, TypeError, AttributeError) as exc:
+        raise PlanError("a safety function in the plan is malformed (it needs function_id and "
+                        f"description; problem: {exc!r}).") from exc
 
 
 @dataclass(frozen=True)
@@ -245,17 +307,22 @@ class CollectionPlan:
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> CollectionPlan:
+        missing = [k for k in ("plan_id", "manufacturer", "model", "items") if k not in d]
+        if missing:
+            raise PlanError(f"the plan is missing {', '.join(missing)}. A plan needs plan_id, "
+                            "manufacturer, model and items.")
+        if not isinstance(d["items"], list):
+            raise PlanError("the plan's items must be a list of objects.")
         return cls(
             plan_id=str(d["plan_id"]),
             manufacturer=str(d["manufacturer"]),
             model=str(d["model"]),
             items=tuple(ItemSpec.from_dict(i) for i in d["items"]),
-            functions=tuple(SafetyFunction.from_dict(f)
-                            for f in (d.get("functions") or ())),
+            functions=_functions(d.get("functions")),
             procedure=str(d.get("procedure", "")),
             notes=str(d.get("notes", "")),
         )
 
     @classmethod
     def from_json(cls, path: str | Path) -> CollectionPlan:
-        return cls.from_dict(json.loads(Path(path).read_text(encoding="utf-8")))
+        return cls.from_dict(read_json_object(path, "collection plan"))

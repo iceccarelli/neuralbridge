@@ -42,7 +42,7 @@ from pathlib import Path
 from typing import Any
 
 from ..collect.collector import CollectionResult, ItemOutcome, collect
-from ..collect.plan import CollectionPlan
+from ..collect.plan import CollectionPlan, read_json_object
 from ..core.actor_names import actor_name_problem, declared_role_problem
 from ..core.errors import AssuranceError
 from ..core.evidence import Actor, Evidence, Origin, ValidationState
@@ -165,13 +165,23 @@ class MachineEntry:
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> MachineEntry:
+        if not isinstance(d, dict):
+            raise KitError(f"each entry of `machines` in kit.json must be an object with "
+                           f"serial, plan and exports, not {type(d).__name__}.")
+        who = f"machine {d['serial']!r}" if d.get("serial") else "a machine entry"
         missing = [k for k in ("serial", "plan", "exports") if not d.get(k)]
         if missing:
+            why = {
+                "serial": "A machine with no serial cannot be told apart from another one "
+                          "later, which is the only thing a fleet record is for.",
+                "plan": "`plan` is the path of the collection plan for this machine "
+                        "(for example plans/cell.json).",
+                "exports": "`exports` is the folder holding this machine's exported files "
+                           "(for example exports/<serial>).",
+            }
             raise KitError(
-                "a machine entry needs " + ", ".join(missing)
-                + ". A machine with no serial cannot be told apart from another "
-                "one later, which is the only thing a fleet record is for."
-            )
+                f"in kit.json, {who} is missing {', '.join(missing)}. "
+                + " ".join(why[m] for m in missing))
         return cls(
             serial=str(d["serial"]), plan=str(d["plan"]),
             exports=str(d["exports"]), year=str(d.get("year", "")),
@@ -275,15 +285,11 @@ class KitConfig:
                 "a working one and edit it."
             )
         try:
-            data = json.loads(p.read_text("utf-8"))
-        except json.JSONDecodeError as exc:
-            raise KitError(f"{p} is not valid JSON: {exc}") from exc
-        except (OSError, UnicodeDecodeError) as exc:
-            # A directory, a permissions problem or a binary file is "the kit could not
-            # run" (exit 2), not an uncaught crash that shares exit 1 with a finding.
+            data = read_json_object(p, "kit config", KitError)
+        except OSError as exc:
+            # A directory or a permissions problem is "the kit could not run" (exit 2), not an
+            # uncaught crash that shares exit 1 with a finding.
             raise KitError(f"{p} could not be read as a kit config: {exc}") from exc
-        if not isinstance(data, dict):
-            raise KitError(f"{p} must contain a JSON object, not {type(data).__name__}.")
         return cls(
             kit_id=str(data.get("kit_id", "")),
             organisation=str(data.get("organisation", "")),
