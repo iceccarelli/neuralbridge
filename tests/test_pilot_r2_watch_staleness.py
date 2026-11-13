@@ -22,7 +22,7 @@ from assurance.change.store import ChainBrokenError
 from assurance.machine.bundle import BUNDLE_KIND
 from assurance.machinery.staleness import Coverage
 from assurance.watch.cli import main as watch_main
-from assurance.watch.config import WatchConfig
+from assurance.watch.config import WatchConfig, WatchError
 from assurance.watch.runner import run_watch
 
 from . import test_assurance_watch_cases as wc
@@ -113,13 +113,16 @@ class TestADamagedVerificationIsNotCoverEvenWhenTheHashIsUnchanged:
         verify_machine(ledger, KEY_0412, when=T0 + timedelta(days=1))
         run_watch(config, ledger, now=T0 + timedelta(days=2))
         corrupt_row(ledger, last_seq(ledger, BUNDLE_KIND))
-        run = run_watch(config, ledger, now=T0 + WEEK)
-        out = _out(run)
-        assert out.status == "observed"
         # The hash did not move and the folder is asserted, but the one verification there is
-        # cannot be read: it stands in as a failure, and the function is not current.
-        assert out.newly_uncovered or out.still_uncovered
-        assert run.verdict != "quiet"
+        # cannot be read, so the chain does not verify. The run used to go on regardless, with
+        # the unreadable row standing in as a failed verification, and seal its observations
+        # onto the broken chain; it now refuses (a watch that cannot trust its ledger observed
+        # nothing). That the function is not current when the row is unreadable is pinned by the
+        # next test, which asks the coverage reasoning directly.
+        before = len(ledger)
+        with pytest.raises(WatchError, match="does not verify"):
+            run_watch(config, ledger, now=T0 + WEEK)
+        assert len(ledger) == before
 
     def test_the_coverage_the_watch_reasons_from_calls_it_failing(self, work, config, ledger):
         from assurance.machinery.manifest import ManifestSource  # noqa: F401
@@ -152,7 +155,7 @@ class TestABrokenChainIsNeverQuiet:
         # verify. Raising is acceptable; saying QUIET (or covered) is not.
         try:
             run = run_watch(config, ledger, now=T0 + WEEK)
-        except ChainBrokenError:
+        except (ChainBrokenError, WatchError):
             return
         assert run.verdict != "quiet"
 

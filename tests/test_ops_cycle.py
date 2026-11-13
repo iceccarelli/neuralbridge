@@ -275,6 +275,84 @@ def test_a_broken_chain_degrades_the_cycle_skips_the_anchor_and_flags_the_backup
     assert "HUMAN ACTIONS REQUIRED" in out
 
 
+def _watch_rows(site: Site) -> list[tuple]:
+    db = sqlite3.connect(site.root / "ev.db")
+    try:
+        return list(db.execute("SELECT * FROM chain ORDER BY seq"))
+    finally:
+        db.close()
+
+
+def _break_watch_ledger(site: Site) -> None:
+    """Edit the first sealed record of the WATCH ledger (a manifest), behind its back."""
+    db = sqlite3.connect(site.root / "ev.db")
+    first = db.execute("SELECT MIN(seq) FROM chain").fetchone()[0]
+    db.execute("UPDATE chain SET payload = replace(payload, 'ControlCo', 'ControlC0') "
+               "WHERE seq = ?", (first,))
+    assert db.total_changes == 1
+    db.commit()
+    db.close()
+
+
+def test_a_tampered_watch_ledger_degrades_the_cycle_and_is_named(site, capsys):
+    """The watch ledger holds the baseline every `watch run` compares with. A cycle that did not
+    walk its chain reported 'cycle OK' over a baseline that had been edited."""
+    assert _cycle(site, capsys)[0] == 1
+    assert _cycle(site, capsys)[0] == 0
+    _break_watch_ledger(site)
+    before = _watch_rows(site)
+
+    code, out, _ = _cycle(site, capsys)
+    doc = site.cycles()[-1]
+    steps = _by_name(doc)
+
+    assert code == 2 and doc["status"] == "degraded" and "cycle OK" not in out
+    chain = steps["ledger.verify"]
+    assert chain["status"] == "failed"
+    assert any("watch ledger ev.db" in f for f in chain["info"]["failing"])
+    assert "watch ledger ev.db" in " ".join(a["action"] for a in doc["human_actions"]
+                                            if a["step"] == "ledger.verify")
+    watch = steps["watch.run:watch.json"]
+    assert watch["status"] == "degraded" and watch["exit_code"] == 2
+    assert "does not verify" in watch["detail"]
+    assert _watch_rows(site) == before                  # the refused watch run sealed nothing
+    # the tenant ledgers are intact and anchor-all works from data_dir only: still anchored
+    assert steps["attest.anchor_all"]["status"] == "ok"
+
+
+def test_a_clean_cycle_verifies_the_watch_ledger_and_says_it_is_not_backed_up(site, capsys):
+    code, out, _ = _cycle(site, capsys)
+    steps = _by_name(site.cycles()[-1])
+    chain = steps["ledger.verify"]
+    assert code in (0, 1) and chain["status"] == "ok"
+    assert chain["info"]["checked"] == 4                # 2 tenants + operator ledger + the watch's
+    assert chain["info"]["watch_ledgers_verified"] == 1
+    assert chain["info"]["watch_ledgers_not_backed_up_or_anchored"] == 1
+    assert "watch ledger(s) verified only: NOT anchored and NOT backed up" in chain["detail"]
+    assert "NOT anchored and NOT backed up" in out      # said in the output, every cycle
+    backup = Path(steps["backup"]["info"]["directory"])
+    assert not list(backup.rglob("ev.db")), "the cycle must not back the watch ledger up silently"
+    assert "ev.db" not in json.loads((backup / "backup-manifest.json").read_text())["files"]
+    assert not any(p.name == "ev.db" for p in (site.data / "attestations").rglob("*"))
+
+
+def test_a_watch_ledger_that_does_not_exist_yet_is_not_called_verified(site, capsys):
+    (site.root / "ev.db").unlink()
+    (site.root / "watch.json").unlink()                 # nothing can create it this cycle
+    code, out, _ = _cycle(site, capsys)
+    chain = _by_name(site.cycles()[-1])["ledger.verify"]
+    assert code == 2                                    # the watch step is degraded
+    assert chain["info"]["watch_ledgers_missing"] == 1 and chain["info"]["checked"] == 3
+    assert "do not exist yet (not verified)" in chain["detail"]
+    assert "watch ledger(s) verified only" not in chain["detail"]
+
+
+def test_dry_run_plan_says_the_watch_ledger_is_verified_only(site, capsys):
+    code, out, _ = _cycle(site, capsys, "--dry-run")
+    assert code == 0 and "each configured watch ledger" in out
+    assert "not anchored, not backed up" in out
+
+
 def test_a_backup_that_does_not_verify_fails_the_cycle(site, capsys, monkeypatch):
     real = restore_check.verify
 

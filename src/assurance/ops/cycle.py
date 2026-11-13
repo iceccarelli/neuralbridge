@@ -2,8 +2,11 @@
 
     1. intel refresh      per configured source; ONLY if config ``live: true`` AND ``--live``
     2. watch run          per configured watch config
-    3. ledger.verify      every ledger under the data directory (read-only chain walk)
-    4. attest anchor-all  only if a key is configured, and only if step 3 passed
+    3. ledger.verify      every ledger under the data directory and each configured watch
+                          ledger (read-only chain walk). A watch ledger is verified ONLY: it is
+                          outside ``data_dir``, so it is neither anchored nor backed up
+    4. attest anchor-all  only if a key is configured, and only if step 3 passed for the
+                          ledgers under the data directory
     5. backup             into a new timestamped directory, then
     6. backup.verify      ``restore_check verify`` on it; a backup that does not verify fails
 
@@ -163,7 +166,9 @@ def plan(cfg: OpsConfig, *, live: bool) -> list[dict[str, Any]]:
     steps.append({"name": "ledger.verify",
                   "command": _cmd("art14", "--ledger", "<each ledger>", "verify"),
                   "status": "planned", "exit_code": None, "duration_s": 0.0,
-                  "detail": "read-only chain walk of every ledger under the data directory"})
+                  "detail": "read-only chain walk of every ledger under the data directory and "
+                            "of each configured watch ledger (a watch ledger is verified only: "
+                            "not anchored, not backed up)"})
     if cfg.attest is None:
         steps.append(_skipped("attest.anchor_all", _cmd("attest", "anchor-all", "..."),
                               "not anchored: no attest key path is configured"))
@@ -303,30 +308,71 @@ def _watch_steps(cfg: OpsConfig) -> tuple[list[dict[str, Any]], list[dict[str, s
     return steps, actions
 
 
+def _watch_ledgers(cfg: OpsConfig, already: list[Path]) -> tuple[list[Path], list[Path]]:
+    """``(present, absent)``: the configured watch ledgers, once each, apart from ``already``.
+
+    A watch's ledger usually sits outside ``data_dir`` and holds the baseline every ``watch
+    run`` compares with, so a chain that does not verify there means the watch's "quiet" cannot
+    be believed. One that does not exist yet is reported as not verified, never as verified.
+    """
+    seen = {p.resolve() for p in already}
+    present: list[Path] = []
+    absent: list[Path] = []
+    for w in cfg.watch:
+        key = w.ledger.resolve()
+        if key in seen:
+            continue
+        seen.add(key)
+        (present if w.ledger.is_file() else absent).append(w.ledger)
+    return present, absent
+
+
 def _chain_step(cfg: OpsConfig) -> dict[str, Any]:
     from assurance.evidence.ledger import EvidenceLedger
 
     cmd = _cmd("art14", "--ledger", "<each ledger>", "verify")
     t0 = time.monotonic()
-    ledgers = _ledgers(cfg.data_dir)
+    data_ledgers = _ledgers(cfg.data_dir)
+    watch_ledgers, watch_absent = _watch_ledgers(cfg, data_ledgers)
+    ledgers = data_ledgers + watch_ledgers
     if not ledgers:
-        return _skipped("ledger.verify", cmd, "no ledger under the data directory to verify")
+        return _skipped("ledger.verify", cmd, "no ledger under the data directory to verify"
+                        + (f"; {len(watch_absent)} configured watch ledger(s) do not exist yet "
+                           "(not verified)" if watch_absent else ""))
     bad: list[str] = []
     errors: list[str] = []
+    data_failed = 0
     for path in ledgers:
+        is_watch = path in watch_ledgers
+        label = f"watch ledger {path.name}" if is_watch else path.name
         try:
             ok, problems = EvidenceLedger(path, mint_id=False).verify_chain()
         except Exception as exc:  # noqa: BLE001
-            errors.append(f"{path.name}: {type(exc).__name__}")
+            errors.append(f"{label}: {type(exc).__name__}")
+            data_failed += not is_watch
             continue
         if not ok:
-            bad.append(f"{path.name}: {len(problems)} problem(s)")
+            bad.append(f"{label}: {len(problems)} problem(s)")
+            data_failed += not is_watch
+    # What this cycle does NOT do with a watch ledger is said every time, not left to a reader
+    # of the runbook: it is verified here, but `attest anchor-all` and `restore_check backup`
+    # work from data_dir, so it is neither anchored nor backed up by this cycle.
+    scope = {"checked": len(ledgers), "data_ledgers": len(data_ledgers),
+             "data_failed": data_failed, "watch_ledgers_verified": len(watch_ledgers),
+             "watch_ledgers_not_backed_up_or_anchored": len(watch_ledgers),
+             "watch_ledgers_missing": len(watch_absent)}
+    tail = ""
+    if watch_ledgers:
+        tail += (f"; {len(watch_ledgers)} watch ledger(s) verified only: NOT anchored and NOT "
+                 "backed up by this cycle")
+    if watch_absent:
+        tail += f"; {len(watch_absent)} configured watch ledger(s) do not exist yet (not verified)"
     if bad or errors:
         return _step("ledger.verify", cmd, "failed", 1 if bad else 2, t0,
                      f"{len(bad)} ledger(s) failed the chain walk, {len(errors)} could not be "
-                     "read", failing=bad[:20], unreadable=errors[:20], checked=len(ledgers))
+                     f"read{tail}", failing=bad[:20], unreadable=errors[:20], **scope)
     return _step("ledger.verify", cmd, "ok", 0, t0,
-                 f"{len(ledgers)} ledger chain(s) verify", checked=len(ledgers))
+                 f"{len(ledgers)} ledger chain(s) verify{tail}", **scope)
 
 
 def _anchor_step(cfg: OpsConfig, chain: dict[str, Any]
@@ -335,11 +381,12 @@ def _anchor_step(cfg: OpsConfig, chain: dict[str, Any]
         return _skipped("attest.anchor_all", _cmd("attest", "anchor-all", "..."),
                         "not anchored: no attest key path is configured"), []
     shown = _cmd(*_anchor_argv(cfg, redact_key=True))
-    if chain["status"] == "failed":
+    scope = chain.get("info", {})
+    if chain["status"] == "failed" and scope.get("data_failed", 1):
         return _skipped("attest.anchor_all", shown, (
             "not anchored: precondition ledger.verify failed. An anchor over a chain already "
             "known to be broken would vouch for it")), []
-    if chain["status"] == "skipped":
+    if chain["status"] == "skipped" or not scope.get("data_ledgers", 1):
         return _skipped("attest.anchor_all", shown, (
             "not anchored: precondition ledger.verify had nothing to verify")), []
     from assurance.attest import cli as attest_cli
@@ -429,7 +476,8 @@ def _backup_steps(cfg: OpsConfig, chain: dict[str, Any], now: datetime
                        f"backup verifies ({vdoc.get('checked', '?')} check(s))",
                        directory=str(target), manifest_sha256=manifest_sha)
     else:
-        explained = degraded and chain["status"] == "failed" and vcode == 1
+        explained = (degraded and chain["status"] == "failed" and vcode == 1
+                     and chain.get("info", {}).get("data_failed", 1) > 0)
         text = (f"verify exit {vcode}: " + (f"{len(problems)} problem(s); first: "
                                             f"{_short(problems[0])}" if problems else
                                             _short(verr.strip() or "unchecked")))
@@ -469,9 +517,12 @@ def run_cycle(cfg: OpsConfig, *, live: bool) -> dict[str, Any]:
     chain = _chain_step(cfg)
     steps.append(chain)
     if chain["status"] == "failed":
+        broken = [*chain.get("info", {}).get("failing", []),
+                  *chain.get("info", {}).get("unreadable", [])]
         actions.append(_action("ledger.verify", "chain", (
-            "a ledger chain does NOT verify or could not be read: do not anchor or rely on it; "
-            "follow OPS.md, incident 'chain verify fails'")))
+            "a ledger chain does NOT verify or could not be read"
+            + (f" ({_short('; '.join(broken))})" if broken else "")
+            + ": do not anchor or rely on it; follow OPS.md, incident 'chain verify fails'")))
     anchor, a_actions = _anchor_step(cfg, chain)
     steps.append(anchor)
     actions += a_actions
