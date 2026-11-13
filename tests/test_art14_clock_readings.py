@@ -500,7 +500,7 @@ class TestPlatformNotes:
         note = d.to_dict()["platform_counter"]["note"]
         assert "FAQ 26" in note and FAQ_URL in note
         assert "15 October 2026" in note and "2026-11-12" in note
-        assert "not observed the platform" in note and "legal deadline" in note
+        assert "not observed the platform" in note and "Art. 14" in note
         assert "defect" not in note.lower() and "defect" not in (clock_module.__doc__ or "").lower()
         assert clock_module.PLATFORM_FAQ_URL == FAQ_URL
 
@@ -531,3 +531,93 @@ class TestPlatformNotes:
         )
         assert "v1.6" in skipped and "re-pinned" in skipped
         assert "does not currently capture" not in skipped and "records detection" not in skipped
+
+
+# --------------------------------------------------------------------------------------------
+# a filing that is late only because the month is counted to its earliest defensible end
+# --------------------------------------------------------------------------------------------
+class TestLateOnlyUnderTheEarliestMonth:
+    NOTIF = parse_utc("2027-01-28T20:00:00Z")
+    FINAL_AT = parse_utc("2027-02-28T15:00:00Z")      # old due 02-28T20:00Z, new due 02-28T10:00Z
+
+    def _final(self, filed=FINAL_AT, track=Track.INCIDENT):
+        return Deadlines(track=track, awareness_at=self.NOTIF - timedelta(hours=40),
+                         notification_submitted_at=self.NOTIF, final_submitted_at=filed).final
+
+    def test_status_and_met_keep_their_meaning_but_the_case_is_marked(self):
+        d = self._final()
+        assert format_utc(d.due_at) == "2027-02-28T10:00:00Z"
+        assert add_one_month(self.NOTIF) == parse_utc("2027-02-28T20:00:00Z")
+        assert (d.status, d.met) == ("filed_late", False)            # unchanged semantics
+        out = d.to_dict()
+        assert out["late_only_under_earliest_reading"] is True
+        note = out["basis"]["status_note"]
+        assert "late only under the earliest-month rule" in note.lower()
+        assert "2027-02-28T20:00:00Z" in note and "qualified lawyer must decide" in note
+
+    @pytest.mark.parametrize("filed", [
+        parse_utc("2027-02-28T09:00:00Z"),        # on time under both
+        parse_utc("2027-03-02T00:00:00Z"),        # late under every reading
+    ])
+    def test_a_filing_on_time_or_late_under_every_reading_is_not_marked(self, filed):
+        assert self._final(filed).to_dict()["late_only_under_earliest_reading"] is False
+
+    def test_an_open_deadline_and_a_vulnerability_are_never_marked(self):
+        assert self._final(filed=None).to_dict()["late_only_under_earliest_reading"] is False
+        measure = parse_utc("2026-10-01T12:00:00Z")
+        v = Deadlines(track=Track.VULNERABILITY, awareness_at=measure, measure_available_at=measure,
+                      final_submitted_at=measure + timedelta(days=14, hours=3)).final
+        assert v.status == "filed_late" and v.to_dict()["late_only_under_earliest_reading"] is False
+
+    def test_the_case_report_line_and_the_register_summary_count_it_separately(self, tmp_path):
+        from assurance.security.art14.report import case_report, register_report
+
+        # dated in the past of the real clock: a filing declared later than the ledger recorded it is
+        # not counted. Notification 2026-10-01T00:00Z: earliest end 10-31T00:15Z, UTC month 11-01T00:00Z.
+        recorded_at = parse_utc("2026-11-05T00:00:00Z")
+        reg = open_case(tmp_path, Track.INCIDENT)
+        reg.record_filing("c1", Stage.NOTIFICATION, parse_utc("2026-10-01T00:00:00Z"), {}, PERSON,
+                          now=recorded_at)
+        reg.record_filing("c1", Stage.FINAL, parse_utc("2026-10-31T12:00:00Z"), {}, PERSON,
+                          now=recorded_at)
+        now = recorded_at
+        text = case_report(reg.case("c1"), now=now)
+        assert "RECORDED AS FILED LATE (late only under the earliest-month rule" in text
+        summary = register_report(reg, now=now)
+        assert "deadline breaches" in summary
+        assert "of which late only under the earliest-month rule  1" in summary
+        assert "late only under the earliest-month rule" in summary.split("BREACHES", 1)[1]
+
+    def test_a_plain_late_filing_is_not_counted_in_the_separate_line(self, tmp_path):
+        from assurance.security.art14.report import register_report
+
+        reg = open_case(tmp_path, Track.VULNERABILITY)
+        reg.record_filing("c1", Stage.EARLY_WARNING, AWARE + timedelta(hours=30), {}, PERSON,
+                          now=parse_utc("2026-12-01T00:00:00Z"))
+        summary = register_report(reg, now=parse_utc("2026-12-01T00:00:00Z"))
+        assert "of which late only under the earliest-month rule  0" in summary
+
+
+class TestComputedNotLegalWording:
+    def test_the_platform_counter_block_calls_the_deadline_computed_and_keeps_the_old_key(self):
+        submitted = parse_utc("2026-09-19T11:15:00Z")
+        d = Deadlines(track=Track.VULNERABILITY, awareness_at=AWARE, early_warning_submitted_at=submitted)
+        counter = d.to_dict()["platform_counter"]
+        assert counter["computed_notification_due"] == counter["legal_notification_due"]   # alias kept
+        assert "legal deadline" not in counter["note"].lower()
+        assert "computes" in counter["note"] and "not a legal determination" in counter["note"]
+
+    def test_the_report_does_not_call_the_computed_time_legal(self, tmp_path):
+        from assurance.security.art14.report import case_report
+
+        reg = open_case(tmp_path, Track.VULNERABILITY)
+        reg.record_filing("c1", Stage.EARLY_WARNING, AWARE + timedelta(hours=2), {}, PERSON, now=NOW)
+        text = case_report(reg.case("c1"), now=NOW)
+        assert "PLATFORM COUNTER DISAGREES WITH THE COMPUTED DEADLINE" in text
+        assert "computed deadline" in text and "LEGAL DEADLINE" not in text.upper().replace("OPEN LEGAL", "")
+
+    def test_the_api_root_says_the_month_is_shown_to_its_earliest_end(self):
+        from assurance.api.routes import root
+
+        text = root()["deadlines"]["final_report_incident"]
+        assert "earliest" in text and "2 days 23 h 58 min" in text and "1 calendar month" not in text

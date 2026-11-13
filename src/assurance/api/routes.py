@@ -167,7 +167,8 @@ def _actor(payload: ActorIn) -> Actor:
 
 
 def _decider(payload: ActorIn, principal: Principal) -> Actor:
-    """The actor of a HUMAN decision (awareness, its supersession, triage, a filing).
+    """The actor of a HUMAN decision (awareness, its supersession, triage, a filing, a measure,
+    the notice to users).
 
     ``payload.kind`` is typed by the caller and defaults to ``person``, so it proves nothing.
     A claim of being a person is therefore bound to a credential exactly as the change
@@ -416,15 +417,19 @@ def post_availability(
     summary="Record a corrective or mitigating measure becoming available",
 )
 def post_measure(
-    case_id: str, body: MeasureIn, register: Art14Register = Depends(get_register)
+    case_id: str,
+    body: MeasureIn,
+    register: Art14Register = Depends(get_register),
+    principal: Principal = Depends(require_register),
 ) -> RecordedOut:
     """Starts the 14-day final-report clock for a vulnerability, Art. 14(2)(c).
 
-    A documented workaround starts it as surely as a patch does.
+    A documented workaround starts it as surely as a patch does. It starts a legal clock, so it
+    is a human decision bound to a decider operator's credential like awareness and a filing.
     """
     try:
         evidence = register.record_measure_available(
-            case_id, body.available_at, body.description, _actor(body.actor)
+            case_id, body.available_at, body.description, _decider(body.actor, principal)
         )
     except Exception as exc:  # noqa: BLE001
         raise _refuse(exc) from exc
@@ -473,15 +478,20 @@ def post_filing(
     summary="Record the Article 14(8) notification to users",
 )
 def post_user_notification(
-    case_id: str, body: UserNotificationIn, register: Art14Register = Depends(get_register)
+    case_id: str,
+    body: UserNotificationIn,
+    register: Art14Register = Depends(get_register),
+    principal: Principal = Depends(require_register),
 ) -> RecordedOut:
+    """The Art. 14(8) notice to users: a statement the manufacturer answers for, so a human
+    decision bound to a decider operator's credential like the other Article 14 decisions."""
     try:
         evidence = register.record_user_notification(
             case_id,
             body.at,
             body.scope,
             body.content,
-            _actor(body.actor),
+            _decider(body.actor, principal),
             public=body.public_disclosure,
         )
     except Exception as exc:  # noqa: BLE001
@@ -798,7 +808,9 @@ def root() -> dict[str, Any]:
                 "(Art. 14(2)(c))"
             ),
             "final_report_incident": (
-                "1 calendar month from submission of the 72 h notification (Art. 14(4)(c))"
+                "one month from submission of the 72 h notification (Art. 14(4)(c)); the due time "
+                "shown is the earliest end of that month in any fixed-offset calendar, so it can "
+                "be up to 2 days 23 h 58 min before the same time of day one month on"
             ),
         },
         "start_here": {

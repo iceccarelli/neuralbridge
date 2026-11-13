@@ -320,6 +320,12 @@ def _has_content(value: Any) -> bool:
     return True
 
 
+def _is_code_shaped(value: Any) -> bool:
+    """Two ASCII letters. ASCII is required BEFORE case folding: ``str.upper()`` maps 'ı' (dotless i)
+    to 'I' and 'ſ' (long s) to 'S', so ``['ıt']`` would otherwise be read as Italy."""
+    return isinstance(value, str) and len(value) == 2 and value.isascii() and value.isalpha()
+
+
 def validate_payload(
     payload: dict[str, Any], track: Track, stage: Stage
 ) -> PayloadValidation:
@@ -409,7 +415,7 @@ def validate_payload(
             )
         )
     if isinstance(states, (list, tuple)):
-        malformed = [s for s in states if not (isinstance(s, str) and len(s) == 2 and s.isalpha())]
+        malformed = [s for s in states if not _is_code_shaped(s)]
         if malformed:
             issues.append(
                 PayloadIssue(
@@ -419,7 +425,7 @@ def validate_payload(
                     f"not ISO 3166-1 alpha-2 codes: {malformed}",
                 )
             )
-        codes = {s.upper() for s in states if isinstance(s, str) and len(s) == 2 and s.isalpha()}
+        codes = {s.upper() for s in states if _is_code_shaped(s)}
         eea = sorted(codes & EEA_NON_EU)
         if eea:
             issues.append(

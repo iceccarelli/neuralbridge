@@ -36,10 +36,11 @@ Three things make this hard in practice, and each is designed for here:
 **The clock starts at a fact nobody records.** Every deadline runs from
 "becoming aware", which the Regulation does not define and the Commission's
 guidance defines as the moment an initial assessment gives reasonable certainty.
-The reporting platform does not yet capture that fact — the vulnerability field
-is documented as arriving in a future release, and the incident field records
-*detection*, which is a different moment. `Awareness` is the compensating
-record, and it is required to carry its reasoning.
+The pinned platform field specification (Glossary v1.3) is older than the live
+glossary (v1.6, 21 October 2026), which lists an awareness field for both tracks
+(its vulnerability description still says "first detected"); a human must diff the
+two and re-pin. Either way `Awareness` is the record of the moment and it is
+required to carry its reasoning.
 
 **The final-report clocks have different triggers.** A vulnerability final
 report is due 14 days after a corrective *or mitigating* measure becomes
@@ -47,9 +48,11 @@ available — a documented workaround starts it as surely as a patch. An inciden
 final report is due one month after the 72-hour notification was *submitted*.
 `clock.py` encodes both, including the calendar-month arithmetic.
 
-**The platform's own countdown is wrong.** In the current release the 72-hour
-counter displays 48 hours after the early warning, so a filing can appear
-overdue while still in time. The register shows both and says which governs.
+**The platform's own countdown may differ.** ENISA's FAQ 26 (page updated 15
+October 2026) describes a release in which the 72-hour counter displays 48 hours
+after the early warning, so a filing can appear overdue while still in time. This
+software has not observed the platform. The register shows both and states that
+the Article 14 deadline governs, not the platform's counter.
 
 ## Use
 

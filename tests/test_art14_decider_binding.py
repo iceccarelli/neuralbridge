@@ -133,3 +133,109 @@ def test_the_deployers_own_operator_key_still_works_with_a_declared_person(world
     r = client.post("/v1/cases/C6/awareness", headers=_h(OPKEY),
                     json=_aware_body({"identifier": "m.braun", "role": "Lead"}))
     assert r.status_code == 201, r.text
+
+
+# -- the two other records that start or answer a duty: a measure and the notice to users -----------
+# The 14-day clock is started by a measure and Art. 14(8) is answered by the user notice, so both are
+# bound to a credential exactly like awareness, triage and a filing (they used to take the declared
+# name of ANY key that reached the register).
+import hashlib  # noqa: E402
+
+MEASURE = {"available_at": "2026-09-19T09:00:00Z", "description": "workaround"}
+NOTICE = {"at": "2026-09-19T09:30:00Z", "scope": "all users", "content": "Apply the fix"}
+ROUTES = [("measure", MEASURE), ("user-notification", NOTICE)]
+
+
+def _open(client, keys, case):
+    _signal(client, keys["decider"], case)
+    r = client.post(f"/v1/cases/{case}/awareness", headers=_h(keys["decider"]),
+                    json=_aware_body({"identifier": "Maria Rossi"}))
+    assert r.status_code == 201, r.text
+
+
+@pytest.mark.parametrize("claim", [
+    {"identifier": "Maria Rossi"},
+    {"identifier": "Maria Rossi", "kind": "person"},
+    {"identifier": "an agent pretending", "kind": "person"},
+])
+@pytest.mark.parametrize("path,body", ROUTES)
+def test_an_account_level_key_cannot_start_the_clock_or_record_the_user_notice(world, path, body,
+                                                                               claim):
+    client, keys = world
+    _open(client, keys, "M1")
+    n = _length(client, keys["account"])
+    r = client.post(f"/v1/cases/M1/{path}", headers=_h(keys["account"]),
+                    json={**body, "actor": claim})
+    assert r.status_code == 403 and r.json()["detail"]["error"] == "operator_required", r.text
+    assert _length(client, keys["account"]) == n
+
+
+@pytest.mark.parametrize("path,body", ROUTES)
+def test_a_decider_operator_records_it_attributed_to_the_operator(world, path, body):
+    client, keys = world
+    _open(client, keys, "M2")
+    r = client.post(f"/v1/cases/M2/{path}", headers=_h(keys["decider"]),
+                    json={**body, "actor": {"identifier": "Maria Rossi", "kind": "automation"}})
+    assert r.status_code == 201, r.text              # the body's kind is ignored
+    history = client.get("/v1/cases/M2/history", headers=_h(keys["decider"])).json()
+    last = [h for h in history["history"] if h["kind"] in ("art14.measure", "art14.user_notice")][-1]
+    assert last["actor_kind"] == "person" and "Maria Rossi" in last["recorded_by"]
+    roles = client.get("/v1/cases/M2/history", headers=_h(keys["decider"])).text
+    assert "authenticated_operator" in roles
+
+
+@pytest.mark.parametrize("path,body", ROUTES)
+def test_an_operator_key_cannot_record_it_in_someone_elses_name(world, path, body):
+    client, keys = world
+    _open(client, keys, "M3")
+    r = client.post(f"/v1/cases/M3/{path}", headers=_h(keys["decider"]),
+                    json={**body, "actor": {"identifier": "Somebody Else"}})
+    assert r.status_code == 403 and r.json()["detail"]["error"] == "actor_mismatch"
+
+
+@pytest.mark.parametrize("path,body", ROUTES)
+def test_a_non_decider_operator_cannot_record_it(world, path, body):
+    client, keys = world
+    _open(client, keys, "M4")
+    r = client.post(f"/v1/cases/M4/{path}", headers=_h(keys["analyst"]),
+                    json={**body, "actor": {"identifier": "Ana Lyst"}})
+    assert r.status_code == 403
+
+
+@pytest.mark.parametrize("path,body", ROUTES)
+def test_no_key_is_401_and_a_revoked_key_is_401(world, path, body):
+    client, keys = world
+    _open(client, keys, "M5")
+    sent = {**body, "actor": {"identifier": "Maria Rossi"}}
+    assert client.post(f"/v1/cases/M5/{path}", json=sent).status_code == 401
+    from assurance.api import deps
+
+    deps.get_accounts().revoke_key(hashlib.sha256(keys["account"].encode()).hexdigest())
+    assert client.post(f"/v1/cases/M5/{path}", headers=_h(keys["account"]),
+                       json=sent).status_code == 401
+
+
+@pytest.mark.parametrize("path,body", ROUTES)
+def test_a_free_or_lapsed_account_is_402(world, path, body):
+    client, keys = world
+    from assurance.api import deps
+
+    accounts = deps.get_accounts()
+    acct = accounts.upsert_account(email="free@example.com", tier="free", company="c",
+                                   stripe_customer_id="cus_f", stripe_subscription_id="sub_f",
+                                   status="cancelled")
+    free_key = accounts.issue_key(acct.id)
+    r = client.post(f"/v1/cases/M6/{path}", headers=_h(free_key),
+                    json={**body, "actor": {"identifier": "Maria Rossi"}})
+    assert r.status_code == 402, r.text
+
+
+def test_the_deployers_own_operator_key_still_records_both_with_a_declared_person(world):
+    client, _ = world
+    _signal(client, OPKEY, "M7")
+    assert client.post("/v1/cases/M7/awareness", headers=_h(OPKEY),
+                       json=_aware_body({"identifier": "m.braun"})).status_code == 201
+    for path, body in ROUTES:
+        r = client.post(f"/v1/cases/M7/{path}", headers=_h(OPKEY),
+                        json={**body, "actor": {"identifier": "m.braun", "role": "Lead"}})
+        assert r.status_code == 201, (path, r.text)

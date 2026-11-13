@@ -261,7 +261,7 @@ def incident_final_due_at(notification_submitted_at: datetime) -> datetime:
 def platform_displayed_notification_due(early_warning_submitted_at: datetime) -> datetime:
     """What the reporting platform's 72-hour counter currently displays.
 
-    Not the legal deadline. Provided so a case view can show the discrepancy
+    Not the Art. 14 deadline. Provided so a case view can show the discrepancy
     explicitly instead of appearing to contradict the platform.
     """
     return early_warning_submitted_at + timedelta(hours=_PLATFORM_COUNTER_OFFSET_HOURS)
@@ -409,6 +409,19 @@ class Deadline:
         return "filed_on_time" if self.content_complete else "recorded_incomplete"
 
     @property
+    def late_only_under_earliest_reading(self) -> bool:
+        """True when the recorded filing is late only because the one-month deadline is counted to
+        its EARLIEST defensible end: after ``due_at`` but not after the UTC same-time-of-day month
+        (the rule before rule version 2). ``status`` and ``met`` still say late; this marks the
+        cases a person should look at first, and is never a finding that the filing was on time.
+        """
+        if self.submitted_at is None or self.provision != "Art. 14(4)(c)":
+            return False
+        if self.submitted_at <= self.due_at:
+            return False
+        return self.submitted_at <= _month_readings(self.runs_from).utc_wall_clock
+
+    @property
     def recorded_after_due(self) -> bool | None:
         """Whether the recorded submission time is later than the due time (None if open)."""
         if self.submitted_at is None:
@@ -501,8 +514,17 @@ class Deadline:
             fits = [r for r, e in zip(readings, ends, strict=True) if self.submitted_at <= e]
             if fits:
                 names = ", ".join(f"{r['id']} (ends {r['would_end_at']})" for r in fits)
+                only = (
+                    "Late only under the earliest-month rule: the due time is the earliest end of "
+                    "the month in any fixed-offset calendar, and this filing is not later than the "
+                    "same time of day one month on in the UTC calendar "
+                    f"({format_utc(_month_readings(self.runs_from).utc_wall_clock)}), which "
+                    "rule version 1 used. "
+                    if self.late_only_under_earliest_reading
+                    else ""
+                )
                 basis["status_note"] = (
-                    f"Recorded as filed late on this product's due_at ({format_utc(self.due_at)}); "
+                    f"{only}Recorded as filed late on this product's due_at ({format_utc(self.due_at)}); "
                     f"the recorded submission time {format_utc(self.submitted_at)} is not later "
                     f"than the end of the period under: {names}. Whether such a reading applies "
                     "is an UNRESOLVED_LEGAL_QUESTION that a qualified lawyer must decide. This "
@@ -522,6 +544,7 @@ class Deadline:
             "submitted_at": format_utc(self.submitted_at) if self.submitted_at else None,
             "content_complete": self.content_complete if self.submitted_at else None,
             "recorded_after_due": self.recorded_after_due,
+            "late_only_under_earliest_reading": self.late_only_under_earliest_reading,
             # What was recorded is the manufacturer's own statement that it submitted. This
             # product has no channel to the reporting platform and verifies nothing about it.
             "submission_evidence": self.submission_evidence,
@@ -707,18 +730,21 @@ class Deadlines:
         }
         if self.early_warning_submitted_at is not None:
             shown = platform_displayed_notification_due(self.early_warning_submitted_at)
-            legal = self.notification.due_at
+            computed = self.notification.due_at
             d["platform_counter"] = {
                 "displayed_notification_due": format_utc(shown),
-                "legal_notification_due": format_utc(legal),
-                "agrees": shown == legal,
+                "computed_notification_due": format_utc(computed),
+                #: the same value under its earlier name, kept so existing readers keep working
+                "legal_notification_due": format_utc(computed),
+                "agrees": shown == computed,
                 "note": (
                     "ENISA CRA SRP FAQ 26, as documented by ENISA (page updated 15 October "
                     "2026, retrieved 2026-11-12, " + PLATFORM_FAQ_URL + "): in the release it "
                     "describes, the 72-hour counter is displayed as 48 hours after submission of "
                     "the early warning rather than 72 hours after awareness. This software has "
-                    "not observed the platform. Where the two differ, the legal deadline "
-                    "(Art. 14) governs, not the platform's counter."
+                    "not observed the platform. The product tracks the 72-hour deadline it computes "
+                    "from the recorded awareness (a computation under Art. 14(2)(b) / 14(4)(b), "
+                    "not a legal determination), not the platform's counter."
                 ),
             }
         return d

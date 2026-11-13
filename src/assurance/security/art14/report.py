@@ -140,7 +140,13 @@ def case_report(case: Case, *, now: datetime | None = None) -> str:
         for d in deadlines.all():
             mark = {
                 "filed_on_time": "recorded as filed, on time",
-                "filed_late": "RECORDED AS FILED LATE",
+                "filed_late": "RECORDED AS FILED LATE"
+                + (
+                    " (late only under the earliest-month rule: not later than the UTC same-time-"
+                    "of-day month; a person decides which reading applies)"
+                    if d.late_only_under_earliest_reading
+                    else ""
+                ),
                 "recorded_incomplete": "RECORDED, CONTENT INCOMPLETE (not counted as met)",
                 "open": "open",
             }[d.status]
@@ -171,9 +177,9 @@ def case_report(case: Case, *, now: datetime | None = None) -> str:
         if platform and not platform["agrees"]:
             out += [
                 "",
-                "PLATFORM COUNTER DISAGREES WITH THE LEGAL DEADLINE",
-                f"  platform shows  {platform['displayed_notification_due']}",
-                f"  legal deadline  {platform['legal_notification_due']}",
+                "PLATFORM COUNTER DISAGREES WITH THE COMPUTED DEADLINE",
+                f"  platform shows     {platform['displayed_notification_due']}",
+                f"  computed deadline  {platform['computed_notification_due']}",
                 f"  {platform['note']}",
             ]
 
@@ -197,6 +203,13 @@ def register_report(register: Art14Register, *, now: datetime | None = None) -> 
     breaches = register.breaches(reference)
     ok, problems = register.ledger.verify_chain()
 
+    only_early = {
+        (c.case_id, d.stage.value)
+        for c in cases
+        if c.deadlines is not None
+        for d in c.deadlines.all()
+        if d.late_only_under_earliest_reading
+    }
     out = [
         _RULE,
         "ARTICLE 14 REGISTER",
@@ -207,6 +220,7 @@ def register_report(register: Art14Register, *, now: datetime | None = None) -> 
         f"  ledger records       {len(register.ledger)}",
         f"  chain verified       {'yes' if ok else 'NO — SEE BELOW'}",
         f"  deadline breaches    {len(breaches)}",
+        f"    of which late only under the earliest-month rule  {len(only_early)}",
         f"  unreadable cases     {len(unreadable)}",
         f"  field spec           ENISA CRA SRP Glossary v{GLOSSARY_VERSION} ({GLOSSARY_DATE})",
         f"  clock rule version   {RULE_VERSION}",
@@ -222,6 +236,11 @@ def register_report(register: Art14Register, *, now: datetime | None = None) -> 
             out.append(
                 f"  {b['case_id']:14s} {b['stage'] or '-':16s} {b['status']:28s} "
                 f"due {b['due_at'] or '-'}  {b['provision'] or ''}"
+                + (
+                    "  (late only under the earliest-month rule)"
+                    if (b["case_id"], b["stage"]) in only_early and b["status"] == "filed_late"
+                    else ""
+                )
             )
 
     if unreadable:
