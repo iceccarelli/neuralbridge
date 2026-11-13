@@ -61,6 +61,7 @@ from assurance.core.evidence import (
     ValidationState,
 )
 from assurance.core.identity import content_hash_of, format_utc, utc_now
+from assurance.core.text import neutralise
 from assurance.evidence.ledger import EvidenceLedger
 from assurance.fleet.registry import Fleet
 from assurance.machinery.divergence import Severity, compare
@@ -73,6 +74,7 @@ from assurance.machinery.manifest import (
     not_a_look,
 )
 from assurance.machinery.record import (
+    MANIFEST_KIND,
     interventions_from_ledger,
     manifests_from_ledger,
     record_divergence,
@@ -539,6 +541,29 @@ def hold_run_lock(ledger: EvidenceLedger, config: WatchConfig) -> Iterator[None]
         os.close(fd)
 
 
+def _require_verifying_chain(ledger: EvidenceLedger, config: WatchConfig) -> None:
+    """Refuse to observe against a ledger whose hash chain does not verify.
+
+    The baseline a run compares with is READ from this ledger. The shared readers drop a
+    record that no longer matches its own seal (``manifests_from_ledger``), so on a damaged
+    chain the machine has no baseline, is announced as a "first observation", is sealed
+    again onto the broken chain and the run reports QUIET: the change that was the reason to
+    look is swallowed and the break is buried. A run that cannot trust its own baseline did
+    not observe anything, so it says so (exit 2) and writes nothing, not even a run record.
+    The walk is a full one: a cached head misses an edit made below it.
+    """
+    ok, problems = ledger.verify_chain()
+    if ok:
+        return
+    raise WatchError(
+        f"the watch ledger {neutralise(str(ledger.path))} does not verify its hash chain "
+        f"({len(problems)} problem(s); first: {neutralise(problems[0])}). Its baseline cannot "
+        f"be trusted, so no observation was recorded and nothing was sealed for watch "
+        f"{config.watch_id}: a machine looked at against a broken baseline would be called a "
+        "first observation and the change would be lost. Restore the ledger from a verified "
+        "backup (deploy/assurance/OPS.md, incident 'chain verify fails'), then run again.")
+
+
 def run_watch(
     config: WatchConfig,
     ledger: EvidenceLedger,
@@ -567,6 +592,7 @@ def _run_watch(
     started = now or utc_now()
     actor = Actor(identifier=config.operator, role="scheduled watch",
                   kind="automation")
+    _require_verifying_chain(ledger, config)
     previous = last_run(ledger, config.watch_id)
     prior = _previous_state(previous)
     # Work an earlier run sealed and died before reporting: the baseline already contains it.
@@ -600,22 +626,50 @@ def _run_watch(
             # Failing to observe is a finding, never progress. No case is
             # advanced, closed or touched on the strength of a machine nobody
             # could see; the ones already open are named so that is visible.
-            held = _open_cases_for(store, machine_key or target.serial)
-            outcomes.append(MachineOutcome(
-                serial=target.serial, machine_key=machine_key or target.serial,
-                status="uncollectable", detail=detail,
-                still_uncovered=tuple(
-                    prior.get(target.serial, {}).get("still_uncovered", ())
-                ),
-                warnings=("an absent export is not an unchanged machine.",
-                          *(f"case {c.case_id} stays {c.status.value}: a machine "
-                            "that could not be observed cannot advance or close "
-                            "a case." for c in held)),
-                open_case_ids=tuple(c.case_id for c in held),
-            ))
+            outcomes.append(_blind(
+                store, target, machine_key, prior, detail,
+                "an absent export is not an unchanged machine."))
             if seal and machine_key:
                 _seal_observation(ledger, target, machine_key, "", "uncollectable",
                                   actor, detail, started)
+            continue
+
+        if result.unreadable:
+            # An item that is THERE and could not be read (no permission, a corrupt archive, an
+            # empty export, a time budget) is not an item that was removed. Compared with the
+            # baseline it would be reported as "removed", a case opened and the exit code 1;
+            # it is "could not observe": degraded (2), nothing compared, nothing re-baselined.
+            unread = ", ".join(
+                f"{o.item_id} ({neutralise(o.detail)})" if o.detail else o.item_id
+                for o in result.unreadable)
+            gone = (f"; and not found: {', '.join(o.item_id for o in result.missing)}"
+                    if result.missing else "")
+            detail = (f"could not be read: {unread}{gone}. These files exist or matched but "
+                      "could not be read, which is not the same as removed; nothing was "
+                      "compared and no baseline was set.")
+            outcomes.append(_blind(
+                store, target, machine_key, prior, detail,
+                f"{len(result.unreadable)} required item(s) could not be read (not "
+                "'not found'): the machine was not observed."))
+            if seal:
+                _seal_observation(ledger, target, machine_key, "", "uncollectable",
+                                  actor, detail, started)
+            continue
+
+        history = manifests_from_ledger(ledger, machine_key)
+        lost = _manifests_that_do_not_load(ledger, machine_key, history)
+        if lost:
+            # The chain verified at the start of this run, yet the ledger holds more manifest
+            # records for this machine than load as valid (an edit since the walk, a reader that
+            # skips a record). The baseline is not the machine's history: calling this look a
+            # "first observation" would re-baseline over the loss and report QUIET.
+            outcomes.append(_blind(
+                store, target, machine_key, prior,
+                f"the baseline cannot be trusted: {len(history) + lost} manifest record(s) are "
+                f"filed for this machine and only {len(history)} load as valid. Nothing was "
+                "compared and no manifest was sealed; verify the ledger "
+                "(`assurance art14 --ledger LEDGER verify`).",
+                "a ledger that has lost manifests is not a machine with no history."))
             continue
 
         manifest = result.manifest
@@ -631,7 +685,6 @@ def _run_watch(
                 + f"{INCOMPLETE_COLLECTION_MARK}: {', '.join(missing_items)} not collected]")
         observed = manifest.configuration_hash()
         why_not_a_look = not_a_look(manifest)
-        history = manifests_from_ledger(ledger, machine_key)
         baseline = last_complete_manifest(history)
 
         # The configuration hash covers the items only. What the manifest DECLARES about the
@@ -878,6 +931,38 @@ def _run_watch(
 
 def _open_cases_for(store: CaseStore, machine_key: str) -> list[ChangeAssuranceCase]:
     return [c for c in store.list() if c.is_open and machine_key in c.machines]
+
+
+def _blind(
+    store: CaseStore, target: WatchTarget, machine_key: str, prior: dict[str, dict[str, Any]],
+    detail: str, why: str,
+) -> MachineOutcome:
+    """A machine this run could not observe: never "unchanged", never a case advanced or closed.
+
+    The cases already open on it are named, so that they are visibly left where they were.
+    """
+    held = _open_cases_for(store, machine_key or target.serial)
+    return MachineOutcome(
+        serial=target.serial, machine_key=machine_key or target.serial,
+        status="uncollectable", detail=detail,
+        still_uncovered=tuple(prior.get(target.serial, {}).get("still_uncovered", ())),
+        warnings=(why, *(f"case {c.case_id} stays {c.status.value}: a machine "
+                         "that could not be observed cannot advance or close "
+                         "a case." for c in held)),
+        open_case_ids=tuple(c.case_id for c in held),
+    )
+
+
+def _manifests_that_do_not_load(
+    ledger: EvidenceLedger, machine_key: str, loaded: list[Any],
+) -> int:
+    """How many manifest records the ledger holds for the machine beyond those that loaded.
+
+    ``manifests_from_ledger`` drops a record that no longer matches its seal without a word, so
+    "no manifest" and "manifests that could not be read" look the same to its caller.
+    """
+    readable, damaged, _clock = ledger.read_subject(machine_key, MANIFEST_KIND)
+    return max(0, len(readable) + len(damaged) - len(loaded))
 
 
 def _assess_interventions(

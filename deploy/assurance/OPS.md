@@ -75,13 +75,21 @@ none of them):
 |---|---|---|---|
 | 1 | `intel.refresh:<source>` | `intel refresh --source S --store F --live [--cve …]` | config `live` is not `true`, **or** `--live` was not passed, **or** no sources configured. Recorded as `skipped`, detail `not refreshed: …` |
 | 2 | `watch.run:<config>` | `watch run CONFIG --ledger L --json`, one per configured watch | none configured |
-| 3 | `ledger.verify` | read-only chain walk of every `tenants/acc_<16 hex>.db` and `art14-register.db` under `data_dir` | no ledger exists |
-| 4 | `attest.anchor_all` | `attest anchor-all --data-dir D --key K --max-age H --json` | no `attest.key` configured; **or ledger.verify failed** (an anchor over a known-broken chain would vouch for it) |
+| 3 | `ledger.verify` | read-only chain walk of every `tenants/acc_<16 hex>.db` and `art14-register.db` under `data_dir`, **and of each configured `watch[].ledger`**. A watch ledger is **verified only: it is NOT anchored and NOT backed up by this cycle** (steps 4 and 5 work from `data_dir`; the step's detail says so every cycle). A configured watch ledger that does not exist yet is reported as not verified | no ledger exists |
+| 4 | `attest.anchor_all` | `attest anchor-all --data-dir D --key K --max-age H --json` | no `attest.key` configured; **or a ledger under `data_dir` failed ledger.verify** (an anchor over a known-broken chain would vouch for it; a broken *watch* ledger does not block anchoring the ledgers under `data_dir`, which are a different set) |
 | 5 | `backup` | `restore_check backup DATA BACKUP_DIR/<UTC timestamp>` into a **new** directory | never skipped |
 | 6 | `backup.verify` | `restore_check verify` on that directory immediately | no backup was taken |
 
 Each step is isolated: an exception or a non-zero exit is recorded and the rest still run, except
-the dependency in row 4. Nothing in the cycle opens a case, establishes awareness, decides an
+the dependency in row 4.
+
+**Watch ledgers.** A watch ledger usually lives outside `data_dir` and holds the baseline every
+`watch run` compares with. `watch run` refuses (exit 2, nothing written) a ledger whose chain does
+not verify, and `ledger.verify` walks it too, so a tampered baseline makes the cycle `degraded`
+and names the ledger (`watch ledger <file>: N problem(s)`). To keep the design honest, the cycle
+does **not** start backing it up or anchoring it silently: take your own SQLite-safe snapshot of it
+(for example `sqlite3 FILE ".backup DEST"`; a plain file copy of a WAL database can lose records)
+and treat the `NOT backed up` wording as a standing reminder, not a pass. Nothing in the cycle opens a case, establishes awareness, decides an
 Article 14 track or closes anything; those are a named person's acts (`PIPELINE.md`, "The human
 acts"). The cycle only reports that a person has something to read.
 
@@ -138,7 +146,7 @@ person did.
 Reads the record (not the data). Prints the last cycle, its age, and the actions it raised, plus
 actions raised by earlier cycles (last 30) and not raised again, labelled as such. Exit: `0` last
 cycle ok and younger than `max_cycle_age_hours`; `1` last cycle flagged; `2` older than
-`max_cycle_age_hours` (**stale**), no record at all, or last cycle degraded. Run it from a
+`max_cycle_age_hours` (**stale**), **dated more than five minutes in the future of this host's clock** (never fresh), no record at all, or last cycle degraded. Run it from a
 monitor that is not the machine being monitored: a dead scheduler writes no record, so only a
 reader elsewhere notices.
 

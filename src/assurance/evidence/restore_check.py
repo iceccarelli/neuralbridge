@@ -303,6 +303,17 @@ def backup(data_dir: Path, out_dir: Path, *, ai_store: Path | None = None) -> li
         _private_dir(out_dir)
         taken: list[str] = []
         pending = 0
+        # Attestation and supplier-feed logs FIRST, the ledgers after them. A log entry attests
+        # to a record the ledger already holds, so a ledger snapshotted after the log copy always
+        # contains everything the copied log refers to. The other way round, an anchor or a
+        # counter-signature that lands between the two steps is in the log but not in the
+        # snapshot, and the backup reads "N record(s) were removed after being attested": a
+        # false alarm that also makes `restore` refuse a good backup.
+        logs: list[str] = []
+        for name in _LOG_DIRS:
+            if (data_dir / name).is_dir():
+                shutil.copytree(data_dir / name, out_dir / name, dirs_exist_ok=True)
+                logs.append(f"{name}/")
         # Tenant ledgers first, the account list after them: a customer who signs up while the
         # backup runs then has an account row without a ledger (harmless), never a ledger in
         # the backup whose account is not (a spurious `belongs to no account`).
@@ -323,10 +334,7 @@ def backup(data_dir: Path, out_dir: Path, *, ai_store: Path | None = None) -> li
             taken.append(_AI_STORE)
         if (out_dir / _ACCOUNTS).exists():
             pending = _strip_pending_keys(out_dir / _ACCOUNTS)
-        for name in _LOG_DIRS:
-            if (data_dir / name).is_dir():
-                shutil.copytree(data_dir / name, out_dir / name, dirs_exist_ok=True)
-                taken.append(f"{name}/")
+        taken.extend(logs)
         _tighten(out_dir)
         _write_manifest(out_dir, pending, _source_findings(out_dir))
         return taken

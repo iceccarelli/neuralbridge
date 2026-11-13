@@ -36,6 +36,26 @@ by the hosted ingest for the same reason (`manifest_not_a_look_at_the_machine`):
 the local verdict and the hosted one use one rule (`machinery.manifest.not_a_look`).
 A *changed* hash is still a finding (exit 1) either way.
 
+## When the watch cannot observe (exit 2)
+
+Exit codes: `0` no findings, `1` findings, `2` unable to observe. "Could not look" is never
+reported as quiet and never re-baselined:
+
+* **The ledger's hash chain does not verify.** `watch run` (also `--dry-run`) walks the whole
+  chain *before* it reads the baseline. A chain that fails exits `2`, names the ledger, says
+  "no observation was recorded" and appends **nothing** (no observation, no run record). The
+  baseline is read from this ledger; without the walk a record edited behind the ledger's back
+  was dropped by the readers, the machine was announced as a "first observation", sealed again
+  and the run read QUIET. Restore from a verified backup (`OPS.md`, section 6, "Chain verify
+  fails"). A machine for which more manifest records are filed than load as valid is
+  `uncollectable` (BLIND), never a first observation.
+* **An item that exists but cannot be read** (no permission, a corrupt archive, an empty
+  export, a time budget) is reported as `could not be read`, the machine is `uncollectable`
+  (exit `2`), no baseline is set and no case is opened. It is not "removed". An item whose
+  file is really absent is still a removal finding (exit `1`).
+* A crash inside a verb (any exception class not handled by the verb) is `error: could not
+  complete (...)` and exit `2`, not a traceback with exit `1`.
+
 ## Four judgements that decide whether anybody reads it
 
 **Seal only on change — but record every look.** A weekly watch over forty
