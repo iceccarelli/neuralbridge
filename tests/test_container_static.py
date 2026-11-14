@@ -180,3 +180,15 @@ def test_the_shipped_orchestrator_examples_never_run_two_ledger_writers() -> Non
     assert re.search(r"^replicaCount:\s*1\s*$", helm, re.M), "deploy/helm: replicaCount must be 1"
     for rel, text in (("deploy/k8s/deployment.yaml", k8s), ("deploy/helm/values.yaml", helm)):
         assert "3 replicas" not in text, f"{rel}: the warning still describes 3 replicas"
+
+def test_platform_image_starts_the_combined_api_with_one_worker() -> None:
+    """Both API surfaces share SQLite account/ledger state in the combined image."""
+    instructions = _instructions(IMAGES["platform"])
+    commands = [rest for head, rest in instructions if head == "CMD"]
+    assert commands, "platform image has no explicit command"
+    command = commands[-1]
+    assert "neuralbridge.combined:app" in command
+    assert '"--workers", "1"' in command
+    env = " ".join(rest for head, rest in instructions if head == "ENV")
+    assert "NEURALBRIDGE_DEBUG=false" in env
+
