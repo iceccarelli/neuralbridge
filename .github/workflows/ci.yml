@@ -282,6 +282,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # tests/test_container_static.py asserts the image launches the combined API, one worker and debug=false.
       - name: Build the NeuralBridge platform image
         run: docker build --pull --file Dockerfile --tag neuralbridge-platform:ci .
       - name: Build the Industrial Assurance API image
