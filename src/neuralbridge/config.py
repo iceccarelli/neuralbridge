@@ -241,6 +241,10 @@ class Settings(BaseSettings):
     # ── Core ─────────────────────────────────────────────────
     env: Environment = Environment.DEVELOPMENT
     debug: bool = True
+    # Exact browser origins allowed to call this API in production. Keep this a comma-separated
+    # origin list (scheme + host + optional port), never a URL with a path and never "*".
+    # Development keeps the permissive local behaviour when debug=True.
+    cors_allowed_origins: str = "https://neuralbridge.io,https://www.neuralbridge.io"
     host: str = "127.0.0.1"  # Use 0.0.0.0 in Docker via env var
     port: int = 8000
     secret_key: str = Field(

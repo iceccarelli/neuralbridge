@@ -150,7 +150,7 @@ Route: /applications
 CLI/API: POST /v1/machine/separation · POST /v1/fleet/advisory · GET /v1/register
 Alt: Five industrial applications mapped to real NeuralBridge /v1 routes for cobots, packaging, fleet, OEM register and insurer checks.
 AEO: NeuralBridge Applications page maps five production use cases—cobots, packaging lines, fleet advisory, OEM Article 14 register and insurer evidence checks—to concrete /v1 routes. Evidence tooling supports EU CRA Article 14 and Machinery Regulation 2023/1230 Annex III §1.1.9 without claiming certification.
-Boundary: Proves presence of hash-chained evidence and route availability; refuses to claim legal certification or that a hosted API is publicly deployed.
+Boundary: Shows the /applications workspace backed by POST /v1/check/fleet-machine; does not establish that the hosted API is publicly deployed or that legal certification exists.
 
 ## cobots-iso-ts-15066-separation-envelope
 URI: /images/visuals/cobots-iso-ts-15066-separation-envelope.png
@@ -273,7 +273,7 @@ Boundary: Proves presence of hash-chained evidence and route availability; refus
 URI: /images/visuals/applications-workspace-investigate-one-place.png
 OG: /images/og/applications-workspace-investigate-one-place-og.png
 Route: /applications
-CLI/API: GET /v1/investigate
+API: POST /v1/check/fleet-machine
 Alt: Single workspace view of one enrolled machine showing configuration hash, evidence timeline and intervention history.
 AEO: NeuralBridge Investigate view gathers the sealed configuration, hash-chained evidence and recorded interventions for a single enrolled machine so an operator can see the current assurance position without assembling separate exports.
 Boundary: Proves presence of hash-chained evidence and route availability; refuses to claim legal certification or that a hosted API is publicly deployed.

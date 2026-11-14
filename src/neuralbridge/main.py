@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from urllib.parse import urlsplit
 
 import structlog
 import uvicorn
@@ -29,6 +30,51 @@ from neuralbridge.security.limits import BodySizeLimitMiddleware
 from neuralbridge.utils.logger import setup_logging
 
 _log = structlog.get_logger(__name__)
+
+
+def _cors_origins(settings: Settings) -> list[str]:
+    """Return validated CORS origins; production never falls back to a wildcard.
+
+    The website calls this API directly from the browser. Debug mode is for local
+    development only and keeps the existing permissive behaviour. Non-debug
+    deployments accept exact HTTPS origins (HTTP is permitted only for loopback).
+    """
+    if settings.debug:
+        return ["*"]
+
+    raw_origins = [part.strip() for part in settings.cors_allowed_origins.split(",")]
+    origins: list[str] = []
+    for raw in raw_origins:
+        if not raw:
+            continue
+        try:
+            parsed = urlsplit(raw)
+            # Reading .port also validates malformed port values.
+            _ = parsed.port
+        except ValueError as exc:
+            raise ValueError("cors_allowed_origins contains an invalid origin") from exc
+        hostname = (parsed.hostname or "").lower()
+        if (
+            parsed.scheme.lower() not in {"https", "http"}
+            or not parsed.netloc
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.path not in {"", "/"}
+            or parsed.query
+            or parsed.fragment
+            or (parsed.scheme.lower() == "http" and hostname not in {"localhost", "127.0.0.1", "::1"})
+        ):
+            raise ValueError(
+                "cors_allowed_origins must contain exact HTTPS origins "
+                "(HTTP is allowed only for localhost); paths and wildcards are not allowed"
+            )
+        origin = f"{parsed.scheme.lower()}://{parsed.netloc.lower()}"
+        if origin not in origins:
+            origins.append(origin)
+
+    if not origins:
+        raise ValueError("cors_allowed_origins must contain at least one exact origin outside debug mode")
+    return origins
 
 
 @asynccontextmanager
@@ -152,7 +198,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # ── CORS ─────────────────────────────────────────────────
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"] if settings.debug else [],
+        allow_origins=_cors_origins(settings),
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],

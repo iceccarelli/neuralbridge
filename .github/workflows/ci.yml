@@ -273,6 +273,21 @@ jobs:
             pip-audit -r "requirements/${lock}.lock" --require-hashes --disable-pip
           done
 
+  # ── Container build verification (no push, no credentials) ──────────
+  # The release workflow publishes these two images only on an explicit version tag. Build
+  # both Dockerfiles on every PR so an untested runtime/lock mismatch or broken image cannot
+  # reach the release tag. No registry login, secret, or image push is used here.
+  container-build:
+    name: Container images (build only)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # tests/test_container_static.py asserts the image launches the combined API, one worker and debug=false.
+      - name: Build the NeuralBridge platform image
+        run: docker build --pull --file Dockerfile --tag neuralbridge-platform:ci .
+      - name: Build the Industrial Assurance API image
+        run: docker build --pull --file deploy/assurance/Dockerfile --tag neuralbridge-assurance:ci .
+
   # ── SBOM Generation ────────────────────────────────────────
   # Built from the hash-pinned lock files, so it lists the exact versions (and SHA-256s) that the
   # two images install, not the `>=` lower bounds. It does not describe base-image OS packages or

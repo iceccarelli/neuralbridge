@@ -6,7 +6,7 @@
 # ──────────────────────────────────────────────────────────────
 
 # ── Python Application ──────────────────────────────────────
-FROM python:3.15-slim AS production
+FROM python:3.11-slim AS production
 
 # Security: run as non-root user
 RUN groupadd -r neuralbridge && useradd -r -g neuralbridge -d /app neuralbridge
@@ -53,9 +53,10 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
 
 # Environment
 ENV NEURALBRIDGE_ENV=production \
+    NEURALBRIDGE_DEBUG=false \
     NEURALBRIDGE_HOST=0.0.0.0 \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
 
 # Start the application
-CMD ["uvicorn", "neuralbridge.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "4"]
+CMD ["uvicorn", "neuralbridge.combined:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]

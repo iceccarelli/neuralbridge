@@ -64,6 +64,27 @@ def test_base_images_are_pinned_to_a_version_tag(image) -> None:
             assert ":" in ref and not ref.endswith(":latest"), f"{name}: unpinned base {ref}"
             assert re.search(r":\d", ref), f"{name}: base {ref} carries no version"
 
+def test_platform_base_python_matches_the_prod_lock_resolver_target() -> None:
+    """The platform image must use the Python version chosen by scripts/lock.sh."""
+    lock_script = (ROOT / "scripts" / "lock.sh").read_text(encoding="utf-8")
+    resolver = re.search(
+        r'"prod\|requirements/prod\.txt\|--universal --python-version ([0-9]+\.[0-9]+)"',
+        lock_script,
+    )
+    assert resolver, "scripts/lock.sh must declare the prod lock's Python resolver target"
+    python_from = next(
+        rest.split()[0]
+        for head, rest in _instructions(IMAGES["platform"])
+        if head == "FROM" and rest.split()[0].startswith("python:")
+    )
+    base = re.search(r"python:([0-9]+\.[0-9]+)", python_from)
+    assert base, f"platform Dockerfile has no explicit Python minor version: {python_from}"
+    assert base.group(1) == resolver.group(1), (
+        f"platform Dockerfile uses Python {base.group(1)} but requirements/prod.lock "
+        f"was resolved for Python {resolver.group(1)}"
+    )
+
+
 
 def test_python_dependencies_install_from_the_hash_checked_lock(image) -> None:
     name, ins = image
@@ -159,3 +180,15 @@ def test_the_shipped_orchestrator_examples_never_run_two_ledger_writers() -> Non
     assert re.search(r"^replicaCount:\s*1\s*$", helm, re.M), "deploy/helm: replicaCount must be 1"
     for rel, text in (("deploy/k8s/deployment.yaml", k8s), ("deploy/helm/values.yaml", helm)):
         assert "3 replicas" not in text, f"{rel}: the warning still describes 3 replicas"
+
+def test_platform_image_starts_the_combined_api_with_one_worker() -> None:
+    """Both API surfaces share SQLite account/ledger state in the combined image."""
+    instructions = _instructions(IMAGES["platform"])
+    commands = [rest for head, rest in instructions if head == "CMD"]
+    assert commands, "platform image has no explicit command"
+    command = commands[-1]
+    assert "neuralbridge.combined:app" in command
+    assert '"--workers", "1"' in command
+    env = " ".join(rest for head, rest in instructions if head == "ENV")
+    assert "NEURALBRIDGE_DEBUG=false" in env
+
