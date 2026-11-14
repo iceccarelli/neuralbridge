@@ -73,4 +73,4 @@ def test_one_cell_key_authenticates_on_both_api_surfaces(tmp_path, monkeypatch):
 
         # Both service health paths are routed to their intended application.
         assert client.get("/livez").status_code == 200
-        assert client.get("/api/v1/health/live").status_code in {200, 404}
+        assert client.get("/api/v1/health/live").status_code == 200
