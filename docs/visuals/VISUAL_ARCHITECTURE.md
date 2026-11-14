@@ -501,7 +501,7 @@ All images live at `public/images/visuals/<slug>.png` (master) and `public/image
 **Route:** `/applications`
 **Alt:** Single workspace view of one enrolled machine showing configuration hash, evidence timeline and intervention history.
 **Caption:** Configuration, evidence and intervention history in one place.
-**CLI/API:** `GET /v1/investigate`
+**API:** `POST /v1/check/fleet-machine`
 
 ```tsx
 <picture>
