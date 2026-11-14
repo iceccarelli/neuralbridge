@@ -7,6 +7,8 @@ name: Stress test (independent authority)
 # is the signal; the job summary lists the failing tests.
 
 on:
+  pull_request:
+    branches: [main]
   schedule:
     - cron: "17 3 * * *"
   workflow_dispatch:
