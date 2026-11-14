@@ -19,7 +19,7 @@ def test_one_cell_key_authenticates_on_both_api_surfaces(tmp_path, monkeypatch):
     monkeypatch.setenv("NEURALBRIDGE_AI_STORE", str(tmp_path / "ai.db"))
     monkeypatch.setenv("NEURALBRIDGE_AUDIT_DB", str(tmp_path / "audit.db"))
     monkeypatch.setenv("NEURALBRIDGE_AUDIT_BACKEND", "sqlite")
-    monkeypatch.setenv("NEURALBRIDGE_CREDENTIAL_JOURNAL", str(tmp_path / "credential-journal.jsonl"))
+    monkeypatch.setenv("NEURALBRIDGE_CREDENTIAL_JOURNAL", str(tmp_path.parent / "custody" / "credential-journal.jsonl"))
 
     # Clear process-local singletons so the test cannot inherit a database path
     # or account cache from a different test.
@@ -65,7 +65,7 @@ def test_one_cell_key_authenticates_on_both_api_surfaces(tmp_path, monkeypatch):
 
         # The Assurance machine/case surface accepts that very same key.
         assurance = client.get(
-            "/v1/cases",
+            "/v1/change/cases",
             headers={"X-API-Key": api_key},
         )
         assert assurance.status_code == 200, assurance.text
