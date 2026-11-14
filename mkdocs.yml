@@ -28,6 +28,8 @@ theme:
     - content.code.copy
 plugins:
   - search
+exclude_docs: |
+  visuals/VISUAL_ARCHITECTURE.md
 nav:
   - Home: assurance/index.md
   - Getting started: getting-started.md
