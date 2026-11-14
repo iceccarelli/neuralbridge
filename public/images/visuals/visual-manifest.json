@@ -869,7 +869,7 @@
     "slug": "applications-workspace-investigate-one-place",
     "targetRoute": "/applications",
     "targetSection": "",
-    "cliOrApiReference": "GET /v1/investigate",
+    "cliOrApiReference": "POST /v1/check/fleet-machine",
     "pngPath": "/images/visuals/applications-workspace-investigate-one-place.png",
     "webpPath": "/images/visuals/applications-workspace-investigate-one-place.webp",
     "ogPath": "/images/og/applications-workspace-investigate-one-place-og.png",
