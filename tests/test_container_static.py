@@ -68,7 +68,7 @@ def test_platform_base_python_matches_the_prod_lock_resolver_target() -> None:
     """The platform image must use the Python version chosen by scripts/lock.sh."""
     lock_script = (ROOT / "scripts" / "lock.sh").read_text(encoding="utf-8")
     resolver = re.search(
-        r'"prod\\|requirements/prod\\.txt\\|--universal --python-version ([0-9]+\\.[0-9]+)"',
+        r'"prod\|requirements/prod\.txt\|--universal --python-version ([0-9]+\.[0-9]+)"',
         lock_script,
     )
     assert resolver, "scripts/lock.sh must declare the prod lock's Python resolver target"
@@ -77,7 +77,7 @@ def test_platform_base_python_matches_the_prod_lock_resolver_target() -> None:
         for head, rest in _instructions(IMAGES["platform"])
         if head == "FROM" and rest.split()[0].startswith("python:")
     )
-    base = re.search(r"python:([0-9]+\\.[0-9]+)", python_from)
+    base = re.search(r"python:([0-9]+\.[0-9]+)", python_from)
     assert base, f"platform Dockerfile has no explicit Python minor version: {python_from}"
     assert base.group(1) == resolver.group(1), (
         f"platform Dockerfile uses Python {base.group(1)} but requirements/prod.lock "
