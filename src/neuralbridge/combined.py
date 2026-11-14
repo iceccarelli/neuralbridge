@@ -73,10 +73,14 @@ def create_app(
 ) -> CombinedService:
     """Create the combined ASGI app, with injectable applications for tests."""
     if assurance_app is None:
-        from assurance.api.service import app as assurance_app
+        from assurance.api.service import app as default_assurance_app
+
+        assurance_app = default_assurance_app
 
     if platform_app is None:
-        from neuralbridge.main import app as platform_app
+        from neuralbridge.main import app as default_platform_app
+
+        platform_app = default_platform_app
 
     return CombinedService(assurance_app=assurance_app, platform_app=platform_app)
 
