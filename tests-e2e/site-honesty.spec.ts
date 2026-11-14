@@ -60,8 +60,13 @@ test('Offer and Product structured data is on / only, monthly, and claims no ava
 
   for (const path of ['/privacy', '/contact', '/assurance', '/docs', '/solutions/manufacturer']) {
     const blocks = jsonLd(await (await request.get(path)).text());
-    // Organization + WebSite from the layout; the docs index adds its visible breadcrumb trail. No Offer anywhere else.
-    const expected = path === '/docs' ? ['Organization', 'WebSite', 'BreadcrumbList'] : ['Organization', 'WebSite'];
+    // The docs index adds its visible breadcrumb trail; the manufacturer solution adds its ImageObject. No Offer elsewhere.
+    const expected =
+      path === '/docs'
+        ? ['Organization', 'WebSite', 'BreadcrumbList']
+        : path === '/solutions/manufacturer'
+          ? ['Organization', 'WebSite', 'ImageObject']
+          : ['Organization', 'WebSite'];
     expect(blocks.map((b) => b['@type']).sort(), `${path} carries only ${expected.join(' + ')}`).toEqual([...expected].sort());
   }
 });

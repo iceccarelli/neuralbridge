@@ -144,10 +144,14 @@ def test_package_metadata_advertises_no_private_repository():
 def test_mkdocs_config_names_no_repository_or_edit_link():
     from pathlib import Path
 
+    import yaml
+
     text = (Path(__file__).resolve().parents[1] / "mkdocs.yml").read_text(encoding="utf-8")
+    config = yaml.safe_load(text)
     for key in ("repo_url", "repo_name", "edit_uri"):
-        assert not any(line.startswith(f"{key}:") for line in text.splitlines()), key
+        assert key not in config
     assert "github.com/iceccarelli" not in text
+    assert "visuals/VISUAL_ARCHITECTURE.md" in config["exclude_docs"].splitlines()
 
 
 def test_the_getting_started_notebook_does_not_call_the_product_open_source():
