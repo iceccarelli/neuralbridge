@@ -143,6 +143,7 @@ def test_package_metadata_advertises_no_private_repository():
 
 def test_mkdocs_config_names_no_repository_or_edit_link():
     from pathlib import Path
+
     import yaml
 
     text = (Path(__file__).resolve().parents[1] / "mkdocs.yml").read_text(encoding="utf-8")
